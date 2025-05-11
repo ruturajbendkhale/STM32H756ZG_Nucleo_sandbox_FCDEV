@@ -1,0 +1,10 @@
+../Core/Src/adxl375.c:9:6:adxl375_write	32	static
+../Core/Src/adxl375.c:17:9:adxl375_read	40	static
+../Core/Src/adxl375.c:24:6:adxl375_read_xyz	40	static
+../Core/Src/adxl375.c:33:6:adxl375_init	8	static
+../Core/Src/adxl375.c:42:9:adxl375_read_x	16	static
+../Core/Src/adxl375.c:49:9:adxl375_read_y	16	static
+../Core/Src/adxl375.c:56:9:adxl375_read_z	16	static
+../Core/Src/adxl375.c:63:6:adxl375_read_xyz_mps2	32	static
+../Core/Src/adxl375.c:85:6:adxl375_write_offsets	16	static
+../Core/Src/adxl375.c:92:6:adxl375_read_offsets	24	static

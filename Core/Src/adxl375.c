@@ -34,7 +34,7 @@ void adxl375_init(void)
 {
     chipid = adxl375_read(ADXL375_REG_DEVID);  // Read device ID (should be 0xE5)
 
-    adxl375_write(ADXL375_REG_DATA_FORMAT, 0x0B); // Full resolution, right-justified, ±200g (0x0B = 00001011)
+    adxl375_write(ADXL375_REG_DATA_FORMAT, 0x0B); // (0x0B = 00001011)
     adxl375_write(ADXL375_REG_BW_RATE, 0x0A);     // Set Output Data Rate to 100 Hz (0x0A = 00001010)
     adxl375_write(ADXL375_REG_POWER_CTL, 0x08);   // Set Measure bit (00001000)
 }
@@ -58,4 +58,46 @@ int16_t adxl375_read_z(void)
     int16_t z;
     adxl375_read_xyz(NULL, NULL, &z);
     return z;
+}
+
+void adxl375_read_xyz_mps2(float *x_mps2, float *y_mps2, float *z_mps2)
+{
+    int16_t raw_x, raw_y, raw_z;
+    adxl375_read_xyz(&raw_x, &raw_y, &raw_z);
+
+    // Convert raw data to m/s^2
+    // Scale factor is 49 mg/LSB. 1 g = 1000 mg.
+    // Acceleration (g) = raw_value * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f)
+    // Acceleration (m/s^2) = Acceleration (g) * GRAVITY_MS2
+
+    if (x_mps2 != NULL) {
+        *x_mps2 = (float)raw_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f) * GRAVITY_MS2;
+    }
+    if (y_mps2 != NULL) {
+        *y_mps2 = (float)raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f) * GRAVITY_MS2;
+    }
+    if (z_mps2 != NULL) {
+        *z_mps2 = (float)raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f) * GRAVITY_MS2;
+    }
+}
+
+// New functions for offset registers
+void adxl375_write_offsets(int8_t ofx, int8_t ofy, int8_t ofz)
+{
+    adxl375_write(ADXL375_REG_OFSX, (uint8_t)ofx);
+    adxl375_write(ADXL375_REG_OFSY, (uint8_t)ofy);
+    adxl375_write(ADXL375_REG_OFSZ, (uint8_t)ofz);
+}
+
+void adxl375_read_offsets(int8_t *ofx, int8_t *ofy, int8_t *ofz)
+{
+    if (ofx != NULL) {
+        *ofx = (int8_t)adxl375_read(ADXL375_REG_OFSX);
+    }
+    if (ofy != NULL) {
+        *ofy = (int8_t)adxl375_read(ADXL375_REG_OFSY);
+    }
+    if (ofz != NULL) {
+        *ofz = (int8_t)adxl375_read(ADXL375_REG_OFSZ);
+    }
 }

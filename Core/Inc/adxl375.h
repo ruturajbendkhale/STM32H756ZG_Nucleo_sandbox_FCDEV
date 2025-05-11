@@ -17,9 +17,15 @@
 #define ADXL375_REG_DATAZ1     0x37
 #define ADXL375_REG_DATA_FORMAT 0x31
 #define ADXL375_REG_BW_RATE    0x2C
+// New Offset Register Definitions
+#define ADXL375_REG_OFSX       0x1E
+#define ADXL375_REG_OFSY       0x1F
+#define ADXL375_REG_OFSZ       0x20
 
 // Measurement range for ADXL375 is ±200g
-// The device outputs 11-bit data with scale factor 49 mg/LSB
+// The device outputs data with a typical scale factor of 49 mg/LSB.
+#define ADXL375_SENSITIVITY_MG_PER_LSB 49.0f // mg per LSB
+#define GRAVITY_MS2                    9.80665f // Standard gravity in m/s^2
 
 // I2C handle (should be defined in main.c or elsewhere)
 extern I2C_HandleTypeDef hi2c1;
@@ -32,5 +38,9 @@ void     adxl375_init(void);
 int16_t  adxl375_read_x(void);
 int16_t  adxl375_read_y(void);
 int16_t  adxl375_read_z(void);
+void     adxl375_read_xyz_mps2(float *x_mps2, float *y_mps2, float *z_mps2);
+// New functions for offset registers
+void     adxl375_write_offsets(int8_t ofx, int8_t ofy, int8_t ofz);
+void     adxl375_read_offsets(int8_t *ofx, int8_t *ofy, int8_t *ofz);
 
 #endif /* __ADXL375_H */

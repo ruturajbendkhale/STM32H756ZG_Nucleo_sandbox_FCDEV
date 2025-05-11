@@ -22,6 +22,7 @@
 #include <stdio.h>
 // #include "lsm6dso.h" // Commented out as LSM6DSO sensor is removed
 #include "driver_bmp390.h" // New BMP390 driver header
+#include "adxl375.h"      // ADXL375 accelerometer header
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
 
@@ -77,9 +78,9 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 /* USER CODE BEGIN PV */
 // static stmdev_ctx_t dev_ctx; // Commented out LSM6DSO context
 
-bmp390_handle_t bmp390_handle;
+// bmp390_handle_t bmp390_handle; // BMP390 related - COMMENTED OUT
 char uart_buffer[256]; // Increased buffer size
-float sea_level_pressure_hpa; // Store as hPa for altitude calculations
+// float sea_level_pressure_hpa; // Store as hPa for altitude calculations - BMP390 related - COMMENTED OUT
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -91,7 +92,8 @@ static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 /* USER CODE BEGIN PFP */
 
-// Wrapper functions for BMP390 driver
+// Wrapper functions for BMP390 driver (Commented out)
+/*
 uint8_t bmp390_i2c_interface_init(void) {
   // MX_I2C1_Init() is called before this, so I2C hardware is already initialized.
   // This function can be a no-op or ensure I2C1 is ready.
@@ -124,7 +126,7 @@ void bmp390_delay_ms(uint32_t ms) {
     HAL_Delay(ms);
 }
 
-// Dummy SPI functions to satisfy driver checks when using I2C
+// Dummy SPI functions to satisfy driver checks when using I2C (Commented out)
 uint8_t bmp390_spi_interface_init(void) {
   // This won't be called if I2C interface is selected
   return 0; // Success
@@ -166,9 +168,7 @@ void bmp390_debug_print(const char *const fmt, ...) {
 }
 
 
-// Altitude calculation functions
-// pressure_hpa: current measured pressure in hPa
-// known_altitude_meters: current known altitude in meters
+// Altitude calculation functions (Commented out)
 void calibrate_sea_level_pressure_hpa(float current_pressure_hpa, float known_altitude_meters) {
   sea_level_pressure_hpa = current_pressure_hpa / powf((1.0f - (known_altitude_meters * 0.0000225577f)), 5.255877f);
 }
@@ -178,6 +178,108 @@ void calibrate_sea_level_pressure_hpa(float current_pressure_hpa, float known_al
 float calculate_altitude_hpa(float pressure_hpa) {
   if (sea_level_pressure_hpa <= 0) return 0.0f; // Avoid division by zero or log of non-positive
   return 44330.0f * (1.0f - powf(pressure_hpa / sea_level_pressure_hpa, 0.1903f));
+}
+*/
+
+void calibrate_adxl375_offsets(void);
+
+// Helper function to clamp a float to int8_t range
+static int8_t clamp_int8(float val) {
+    if (val > 127.0f) return 127;
+    if (val < -128.0f) return -128;
+    return (int8_t)val;
+}
+
+void calibrate_adxl375_offsets(void) {
+    const int num_readings = 50;
+    float sum_x_mps2 = 0.0f, sum_y_mps2 = 0.0f, sum_z_mps2 = 0.0f;
+    float avg_x_mps2, avg_y_mps2, avg_z_mps2;
+    float offset_x_mps2, offset_y_mps2, offset_z_mps2;
+    float offset_x_mg, offset_y_mg, offset_z_mg;
+    float offset_x_lsb, offset_y_lsb, offset_z_lsb;
+    int8_t reg_ofx, reg_ofy, reg_ofz;
+
+    sprintf(uart_buffer, "Starting ADXL375 offset calibration (ensure sensor is stable, Z-axis up)...\r\n");
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // 1. Reset hardware offsets to 0 to measure current raw offsets
+    adxl375_write_offsets(0, 0, 0);
+    HAL_Delay(20); // Give it a moment
+
+    sprintf(uart_buffer, "Taking %d readings for averaging...\r\n", num_readings);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // 2. Read and average multiple readings
+    for (int i = 0; i < num_readings; i++) {
+        float cur_x, cur_y, cur_z;
+        adxl375_read_xyz_mps2(&cur_x, &cur_y, &cur_z);
+        sum_x_mps2 += cur_x;
+        sum_y_mps2 += cur_y;
+        sum_z_mps2 += cur_z;
+        HAL_Delay(20); // Adjusted delay, ADXL375 ODR is 100Hz (10ms period), 20ms is safe
+    }
+    avg_x_mps2 = sum_x_mps2 / num_readings;
+    avg_y_mps2 = sum_y_mps2 / num_readings;
+    avg_z_mps2 = sum_z_mps2 / num_readings;
+
+    sprintf(uart_buffer, "Avg raw readings (before cal): X=%.2f, Y=%.2f, Z=%.2f m/s^2\r\n", avg_x_mps2, avg_y_mps2, avg_z_mps2);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // 3. Calculate desired offsets (assuming Z is up, X & Y are horizontal)
+    // For X and Y, the current average IS the offset we want to remove.
+    offset_x_mps2 = avg_x_mps2;
+    offset_y_mps2 = avg_y_mps2;
+    // For Z, we want it to read GRAVITY_MS2 (approx 9.81). So, offset = current_avg - target_value
+    offset_z_mps2 = avg_z_mps2 - GRAVITY_MS2; // If Z points up, its reading should be +GRAVITY_MS2
+
+    sprintf(uart_buffer, "Calculated m/s^2 offsets to remove: X=%.2f, Y=%.2f, Z(comp for G)=%.2f\r\n", offset_x_mps2, offset_y_mps2, offset_z_mps2);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // 4. Convert offsets from m/s^2 to mg, then to LSB for OFS registers
+    const float adxl375_offset_lsb_mg_datasheet = 15.6f;
+    // Empirically observed amplification factor of the offset register's effect
+    const float empirical_amplification_factor = 12.5f; // Derived from (12.01+12.73+12.78)/3
+    const float actual_offset_mg_per_lsb = adxl375_offset_lsb_mg_datasheet * empirical_amplification_factor;
+
+    offset_x_mg = (offset_x_mps2 / GRAVITY_MS2) * 1000.0f;
+    offset_y_mg = (offset_y_mps2 / GRAVITY_MS2) * 1000.0f;
+    offset_z_mg = (offset_z_mps2 / GRAVITY_MS2) * 1000.0f;
+
+    // Use the effective actual_offset_mg_per_lsb for conversion
+    offset_x_lsb = offset_x_mg / actual_offset_mg_per_lsb;
+    offset_y_lsb = offset_y_mg / actual_offset_mg_per_lsb;
+    offset_z_lsb = offset_z_mg / actual_offset_mg_per_lsb;
+
+    // 5. Write the NEGATIVE of the LSB values to the offset registers, clamping to int8_t range
+    reg_ofx = clamp_int8(-offset_x_lsb);
+    reg_ofy = clamp_int8(-offset_y_lsb);
+    reg_ofz = clamp_int8(-offset_z_lsb);
+
+    sprintf(uart_buffer, "Values to write to OFS registers (LSB, 15.6mg/LSB): OFSX=%d, OFSY=%d, OFSZ=%d\r\n", reg_ofx, reg_ofy, reg_ofz);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    adxl375_write_offsets(reg_ofx, reg_ofy, reg_ofz);
+    HAL_Delay(10); // Short delay after writing offsets
+
+    sprintf(uart_buffer, "ADXL375 offset calibration complete. New offsets written to sensor.\r\n");
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // Optional: Read back offsets written to sensor to verify
+    int8_t rofx, rofy, rofz;
+    adxl375_read_offsets(&rofx, &rofy, &rofz);
+    sprintf(uart_buffer, "Read back from OFS registers: OFSX=%d, OFSY=%d, OFSZ=%d\r\n", rofx, rofy, rofz);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // Optional: Take a few readings after calibration to see the effect
+    sprintf(uart_buffer, "Taking a few readings post-calibration...\r\n");
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    for(int k=0; k<3; k++){
+        float post_cal_x, post_cal_y, post_cal_z;
+        adxl375_read_xyz_mps2(&post_cal_x, &post_cal_y, &post_cal_z);
+        sprintf(uart_buffer, "Post-Cal Reading %d: X=%.2f, Y=%.2f, Z=%.2f m/s^2\r\n", k+1, post_cal_x, post_cal_y, post_cal_z);
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+        HAL_Delay(100);
+    }
 }
 
 /* USER CODE END PFP */
@@ -220,6 +322,7 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t 
 // International barometric formula (accurate for altitudes < 11km)
 //  return 44330.0f * (1.0f - powf(pressure_pa / (sea_level_pressure_bar * 100000.0f), 0.1903f));
 //}
+
 /* USER CODE END 0 */
 
 /**
@@ -271,7 +374,7 @@ int main(void)
   
   uint8_t i2c_devices_found = 0;
   for (uint8_t i = 1; i < 128; i++) {
-    if (i < 0x08 || i > 0x77) continue;
+    if (i < 0x08 || i > 0x77) continue; // Valid 7-bit addresses
 
     HAL_StatusTypeDef i2c_result = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(i << 1), 2, 10); // Use 2 trials, 10ms timeout
     
@@ -280,8 +383,14 @@ int main(void)
       sprintf(uart_buffer, "Found I2C device at address: 0x%02X\r\n", i);
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
+      /* // BMP390 specific check commented out
       if (i == (BMP390_I2C_ADDRESS_LOW >> 1) || i == (BMP390_I2C_ADDRESS_HIGH >> 1)) {
         sprintf(uart_buffer, "  --> This could be a BMP390 sensor!\r\n");
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      }
+      */
+      if (i == (ADXL375_ADDRESS >> 1)) {
+        sprintf(uart_buffer, "  --> This could be an ADXL375 sensor!\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
     }
@@ -295,6 +404,27 @@ int main(void)
     HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
   }
 
+  // Initialize ADXL375
+  sprintf(uart_buffer, "Initializing ADXL375...\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  adxl375_init();
+  uint8_t adxl_chip_id = adxl375_read(ADXL375_REG_DEVID);
+  sprintf(uart_buffer, "ADXL375 Chip ID: 0x%02X (Expected: 0xE5)\r\n", adxl_chip_id);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  if (adxl_chip_id == 0xE5) {
+    sprintf(uart_buffer, "ADXL375 Initialized Successfully!\r\n");
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+    // Calibrate ADXL375 offsets
+    calibrate_adxl375_offsets();
+
+  } else {
+    sprintf(uart_buffer, "ADXL375 Initialization FAILED! Chip ID: 0x%02X. Check wiring or device.\r\n", adxl_chip_id);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    // Optionally, call Error_Handler() or handle as appropriate
+  }
+
+  /* // BMP390 Initialization and Configuration Code (Commented out)
   // Initialize BMP390 using the new driver
   DRIVER_BMP390_LINK_INIT(&bmp390_handle, bmp390_handle_t);
   DRIVER_BMP390_LINK_IIC_INIT(&bmp390_handle, bmp390_i2c_interface_init);
@@ -398,16 +528,17 @@ int main(void)
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       sea_level_pressure_hpa = 1013.25f; // Default
   }
+  */
   
   // Turn on LED to indicate ready state
   HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); // LD2 is usually green or yellow.
-  
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    /* // BMP390 Data Reading Code (Commented out)
     uint32_t raw_pressure, raw_temperature;
     float pressure_pa, temperature_c;
     float altitude_m;
@@ -428,11 +559,21 @@ int main(void)
         HAL_Delay(100);
         HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET);
     }
+    */
+
+    // ADXL375 Data Reading
+    float ax_mps2, ay_mps2, az_mps2;
+    adxl375_read_xyz_mps2(&ax_mps2, &ay_mps2, &az_mps2);
+
+    sprintf(uart_buffer, "%0.2f, %0.2f, %0.2f\r\n",
+            ax_mps2, ay_mps2, az_mps2);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    
+    HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
     
     /* LSM6DSO code commented out as sensor is removed */
     
-    HAL_Delay(40); // Corresponds to 25Hz ODR. (1000ms / 25Hz = 40ms)
-                   // Or a bit longer if UART transmission takes time: HAL_Delay(200);
+    HAL_Delay(200); // Delay for readability, adjust as needed. ADXL375 ODR is 100Hz by default.
     
     /* USER CODE END WHILE */
 
