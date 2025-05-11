@@ -34,34 +34,34 @@ $(wildcard ../makefile.init) \
 $(wildcard ../makefile.targets) \
 
 
-BUILD_ARTIFACT_NAME := STM32h7_Dummy
+BUILD_ARTIFACT_NAME := STM32H756ZG_Nucleo_sandbox_FCDEV
 BUILD_ARTIFACT_EXTENSION := elf
 BUILD_ARTIFACT_PREFIX :=
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
 # Add inputs and outputs from these tool invocations to the build variables 
 EXECUTABLES += \
-STM32h7_Dummy.elf \
+STM32H756ZG_Nucleo_sandbox_FCDEV.elf \
 
 MAP_FILES += \
-STM32h7_Dummy.map \
+STM32H756ZG_Nucleo_sandbox_FCDEV.map \
 
 SIZE_OUTPUT += \
 default.size.stdout \
 
 OBJDUMP_LIST += \
-STM32h7_Dummy.list \
+STM32H756ZG_Nucleo_sandbox_FCDEV.list \
 
 
 # All Target
 all: main-build
 
 # Main-build Target
-main-build: STM32h7_Dummy.elf secondary-outputs
+main-build: STM32H756ZG_Nucleo_sandbox_FCDEV.elf secondary-outputs
 
 # Tool invocations
-STM32h7_Dummy.elf STM32h7_Dummy.map: $(OBJS) $(USER_OBJS) C:\Users\rutur\STM32CubeIDE\workspace_1.18.1\STM32h7_Dummy\STM32F756ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "STM32h7_Dummy.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\rutur\STM32CubeIDE\workspace_1.18.1\STM32h7_Dummy\STM32F756ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="STM32h7_Dummy.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+STM32H756ZG_Nucleo_sandbox_FCDEV.elf STM32H756ZG_Nucleo_sandbox_FCDEV.map: $(OBJS) $(USER_OBJS) C:\Users\rutur\Documents\GitHub\STM32H756ZG_Nucleo_sandbox_FCDEV\STM32F756ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "STM32H756ZG_Nucleo_sandbox_FCDEV.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\rutur\Documents\GitHub\STM32H756ZG_Nucleo_sandbox_FCDEV\STM32F756ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="STM32H756ZG_Nucleo_sandbox_FCDEV.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -70,14 +70,14 @@ default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-STM32h7_Dummy.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "STM32h7_Dummy.list"
+STM32H756ZG_Nucleo_sandbox_FCDEV.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "STM32H756ZG_Nucleo_sandbox_FCDEV.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) STM32h7_Dummy.elf STM32h7_Dummy.list STM32h7_Dummy.map default.size.stdout
+	-$(RM) STM32H756ZG_Nucleo_sandbox_FCDEV.elf STM32H756ZG_Nucleo_sandbox_FCDEV.list STM32H756ZG_Nucleo_sandbox_FCDEV.map default.size.stdout
 	-@echo ' '
 
 secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)
