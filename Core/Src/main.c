@@ -25,6 +25,7 @@
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
 #include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
+#include "adxl375.h"     // Add ADXL375 support
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -208,9 +209,6 @@ void bmp390_debug_print(const char *const fmt, ...) {
     va_start(args, fmt);
     vsnprintf(dbg_buffer, sizeof(dbg_buffer), fmt, args);
     va_end(args);
-    // Prepend "BMP390_DBG: " to distinguish driver debug messages
-    // snprintf(uart_buffer, sizeof(uart_buffer), "BMP390_DBG: %s", dbg_buffer); // This might truncate
-    // HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
     // Direct transmit is simpler if buffer is managed carefully
     HAL_UART_Transmit(&huart3, (uint8_t*)"BMP390_DBG: ", 12, HAL_MAX_DELAY);
     HAL_UART_Transmit(&huart3, (uint8_t*)dbg_buffer, strlen(dbg_buffer), HAL_MAX_DELAY);
@@ -535,6 +533,86 @@ int main(void)
       sea_level_pressure_hpa = 1013.25f; // Default
   }
   
+  // Initialize ADXL375 high-g accelerometer
+  sprintf(uart_buffer, "Initializing ADXL375 high-g accelerometer...\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  
+  adxl375_init();
+  
+  uint8_t adxl_id = adxl375_read(ADXL375_REG_DEVID);
+  if (adxl_id == 0xE5) {
+      sprintf(uart_buffer, "ADXL375 initialized successfully. DEVID: 0x%02X (expected 0xE5)\r\n", adxl_id);
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+      // Calibrate ADXL375 - assume device is positioned so Z reads 1G, X/Y read 0G
+      sprintf(uart_buffer, "Calibrating ADXL375... Please keep device still with Z-axis up.\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+      // Take 50 samples and average them
+      int32_t sum_x = 0, sum_y = 0, sum_z = 0;
+      int16_t raw_x, raw_y, raw_z;
+      const int cal_samples = 50;
+      
+      for (int i = 0; i < cal_samples; i++) {
+          adxl375_read_xyz(&raw_x, &raw_y, &raw_z);
+          sum_x += raw_x;
+          sum_y += raw_y;
+          sum_z += raw_z;
+          
+          // Flash LED to show calibration in progress
+          if (i % 10 == 0) {
+              HAL_GPIO_TogglePin(GPIOB, LD1_Pin);
+          }
+          HAL_Delay(10);
+      }
+      
+      // Calculate average readings
+      float avg_x = (float)sum_x / cal_samples;
+      float avg_y = (float)sum_y / cal_samples;
+      float avg_z = (float)sum_z / cal_samples;
+      
+      // Calculate offsets needed to make Z read 1G and X/Y read 0G
+      // First, determine the expected 1G raw reading based on sensitivity
+      float expected_1g_raw = 1000.0f / ADXL375_SENSITIVITY_MG_PER_LSB; // 1g = 1000mg
+      
+      // Calculate the offset values (signed 8-bit, so max ±127)
+      // Offset registers act in the opposite direction of the measurement
+      int8_t offset_x = -(int8_t)(avg_x / 4.0f); // ADXL375 datasheet specifies 15.6mg per LSB for offset registers
+      int8_t offset_y = -(int8_t)(avg_y / 4.0f);
+      int8_t offset_z = -(int8_t)((avg_z - expected_1g_raw) / 4.0f);
+      
+      // Clamp to int8_t range
+      offset_x = (offset_x > 127) ? 127 : ((offset_x < -128) ? -128 : offset_x);
+      offset_y = (offset_y > 127) ? 127 : ((offset_y < -128) ? -128 : offset_y);
+      offset_z = (offset_z > 127) ? 127 : ((offset_z < -128) ? -128 : offset_z);
+      
+      // Write the offsets to the ADXL375
+      adxl375_write_offsets(offset_x, offset_y, offset_z);
+      
+      // Read back and verify the offsets
+      int8_t read_offset_x, read_offset_y, read_offset_z;
+      adxl375_read_offsets(&read_offset_x, &read_offset_y, &read_offset_z);
+      
+      sprintf(uart_buffer, "ADXL375 Calibration Complete.\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+      sprintf(uart_buffer, "  Avg Readings: X=%.2f, Y=%.2f, Z=%.2f\r\n", 
+              avg_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f),
+              avg_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f),
+              avg_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f));
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+      sprintf(uart_buffer, "  Applied Offsets: X=%d, Y=%d, Z=%d\r\n", offset_x, offset_y, offset_z);
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+      sprintf(uart_buffer, "  Readback Offsets: X=%d, Y=%d, Z=%d\r\n", read_offset_x, read_offset_y, read_offset_z);
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      
+  } else {
+      sprintf(uart_buffer, "ADXL375 initialization FAILED! DEVID: 0x%02X (expected 0xE5)\r\n", adxl_id);
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  }
+  
   // Turn on LED to indicate ready state
   HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); // LD2 is usually green or yellow.
   
@@ -608,7 +686,20 @@ int main(void)
         HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET);
     }
     
-    // LSM6DSO code commented out as sensor is removed // This comment can be removed now.
+    // Read ADXL375 high-g accelerometer (±200g range)
+    int16_t adxl_raw_x, adxl_raw_y, adxl_raw_z;
+    float adxl_x_g, adxl_y_g, adxl_z_g;
+    
+    adxl375_read_xyz(&adxl_raw_x, &adxl_raw_y, &adxl_raw_z);
+    
+    // Convert to g (using 49 mg/LSB sensitivity from the header)
+    adxl_x_g = (float)adxl_raw_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f); 
+    adxl_y_g = (float)adxl_raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
+    adxl_z_g = (float)adxl_raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
+    
+    snprintf(uart_buffer, sizeof(uart_buffer), "ADXL375 High-G: X=%.2f g, Y=%.2f g, Z=%.2f g\r\n", 
+            adxl_x_g, adxl_y_g, adxl_z_g);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
     
     HAL_Delay(40); // Corresponds to 25Hz ODR. (1000ms / 25Hz = 40ms)
                    // Or a bit longer if UART transmission takes time: HAL_Delay(100); // Adjusted for potentially more UART data.

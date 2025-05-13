@@ -1,3 +1,4 @@
+"./Core/Src/adxl375.o"
 "./Core/Src/driver_bmp390.o"
 "./Core/Src/lsm6dso.o"
 "./Core/Src/lsm6dso_reg.o"
