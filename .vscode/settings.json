@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "lsm6dso.h": "c"
+        "lsm6dso.h": "c",
+        "main.h": "c"
     }
 }

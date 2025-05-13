@@ -191,7 +191,7 @@ typedef struct
 #define LSM6DSO_I2C_ADD_H                    0xD7
 
 /** Device Identification (Who am I) **/
-#define LSM6DSO_ID                           0x6C
+#define LSM6DSO_WHO_AM_I 0x6B // Correct WHO AM I for LSM6DSO/32
 
 /**
   * @}

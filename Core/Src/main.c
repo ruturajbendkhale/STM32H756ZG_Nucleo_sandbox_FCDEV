@@ -20,8 +20,8 @@
 #include "main.h"
 #include "string.h"
 #include <stdio.h>
-// #include "lsm6dso.h" // Commented out as LSM6DSO sensor is removed
-#include "driver_bmp390.h" // New BMP390 driver header
+#include "lsm6dso.h" // LSM6DSO IMU
+#include "driver_bmp390.h" // BMP390 Pressure/Temperature Sensor
 #include "adxl375.h"      // ADXL375 accelerometer header
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
@@ -76,11 +76,20 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-// static stmdev_ctx_t dev_ctx; // Commented out LSM6DSO context
+// static stmdev_ctx_t dev_ctx; // Commented out LSM6DSO context (original, replaced by LSM6DSO_Object_t)
 
-// bmp390_handle_t bmp390_handle; // BMP390 related - COMMENTED OUT
+bmp390_handle_t bmp390_handle; // BMP390 related
 char uart_buffer[256]; // Increased buffer size
-// float sea_level_pressure_hpa; // Store as hPa for altitude calculations - BMP390 related - COMMENTED OUT
+float sea_level_pressure_hpa; // Store as hPa for altitude calculations - BMP390 related
+
+LSM6DSO_Object_t lsm6dso_obj; // LSM6DSO sensor object
+LSM6DSO_IO_t lsm6dso_io_ctx;  // LSM6DSO IO context
+
+// LSM6DSO Axes data
+LSM6DSO_Axes_t lsm6dso_acc_axes;
+LSM6DSO_Axes_t lsm6dso_gyro_axes;
+float lsm6dso_temp_c;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -92,11 +101,9 @@ static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 /* USER CODE BEGIN PFP */
 
-// Wrapper functions for BMP390 driver (Commented out)
-/*
+// Wrapper functions for BMP390 driver
 uint8_t bmp390_i2c_interface_init(void) {
   // MX_I2C1_Init() is called before this, so I2C hardware is already initialized.
-  // This function can be a no-op or ensure I2C1 is ready.
   return 0; // Success
 }
 
@@ -106,7 +113,6 @@ uint8_t bmp390_i2c_interface_deinit(void) {
 }
 
 uint8_t bmp390_i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, uint16_t len) {
-    // The driver's a_bmp390_iic_spi_read calls this with addr = handle->iic_addr
     if (HAL_I2C_Mem_Read(&hi2c1, addr, reg, I2C_MEMADD_SIZE_8BIT, buf, len, HAL_MAX_DELAY) == HAL_OK) {
         return 0; // Success
     }
@@ -114,8 +120,6 @@ uint8_t bmp390_i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, uint16_t len) {
 }
 
 uint8_t bmp390_i2c_write(uint8_t addr, uint8_t reg, uint8_t *buf, uint16_t len) {
-    // The driver's a_bmp390_iic_spi_write calls this in a loop with len=1 for multi-byte writes.
-    // So, this function will effectively be called to write one byte at a time.
     if (HAL_I2C_Mem_Write(&hi2c1, addr, reg, I2C_MEMADD_SIZE_8BIT, buf, len, HAL_MAX_DELAY) == HAL_OK) {
         return 0; // Success
     }
@@ -126,60 +130,54 @@ void bmp390_delay_ms(uint32_t ms) {
     HAL_Delay(ms);
 }
 
-// Dummy SPI functions to satisfy driver checks when using I2C (Commented out)
-uint8_t bmp390_spi_interface_init(void) {
-  // This won't be called if I2C interface is selected
-  return 0; // Success
-}
-
-uint8_t bmp390_spi_interface_deinit(void) {
-  // This won't be called if I2C interface is selected
-  return 0; // Success
-}
-
-uint8_t bmp390_spi_read(uint8_t reg, uint8_t *buf, uint16_t len) {
-  // This won't be called if I2C interface is selected
-  (void)reg; // Suppress unused parameter warning
-  (void)buf; // Suppress unused parameter warning
-  (void)len; // Suppress unused parameter warning
-  return 1; // Simulate failure if somehow called
-}
-
-uint8_t bmp390_spi_write(uint8_t reg, uint8_t *buf, uint16_t len) {
-  // This won't be called if I2C interface is selected
-  (void)reg; // Suppress unused parameter warning
-  (void)buf; // Suppress unused parameter warning
-  (void)len; // Suppress unused parameter warning
-  return 1; // Simulate failure if somehow called
-}
+uint8_t bmp390_spi_interface_init(void) { return 0; }
+uint8_t bmp390_spi_interface_deinit(void) { return 0; }
+uint8_t bmp390_spi_read(uint8_t reg, uint8_t *buf, uint16_t len) { (void)reg; (void)buf; (void)len; return 1; }
+uint8_t bmp390_spi_write(uint8_t reg, uint8_t *buf, uint16_t len) { (void)reg; (void)buf; (void)len; return 1; }
 
 void bmp390_debug_print(const char *const fmt, ...) {
-    char dbg_buffer[128]; // Buffer for debug messages
+    char dbg_buffer[128];
     va_list args;
     va_start(args, fmt);
     vsnprintf(dbg_buffer, sizeof(dbg_buffer), fmt, args);
     va_end(args);
-    // Prepend "BMP390_DBG: " to distinguish driver debug messages
-    // snprintf(uart_buffer, sizeof(uart_buffer), "BMP390_DBG: %s", dbg_buffer); // This might truncate
-    // HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-    // Direct transmit is simpler if buffer is managed carefully
     HAL_UART_Transmit(&huart3, (uint8_t*)"BMP390_DBG: ", 12, HAL_MAX_DELAY);
     HAL_UART_Transmit(&huart3, (uint8_t*)dbg_buffer, strlen(dbg_buffer), HAL_MAX_DELAY);
 }
 
-
-// Altitude calculation functions (Commented out)
 void calibrate_sea_level_pressure_hpa(float current_pressure_hpa, float known_altitude_meters) {
   sea_level_pressure_hpa = current_pressure_hpa / powf((1.0f - (known_altitude_meters * 0.0000225577f)), 5.255877f);
 }
 
-// pressure_hpa: current measured pressure in hPa
-// returns altitude in meters
 float calculate_altitude_hpa(float pressure_hpa) {
-  if (sea_level_pressure_hpa <= 0) return 0.0f; // Avoid division by zero or log of non-positive
+  if (sea_level_pressure_hpa <= 0) return 0.0f;
   return 44330.0f * (1.0f - powf(pressure_hpa / sea_level_pressure_hpa, 0.1903f));
 }
-*/
+
+// Platform I/O functions for LSM6DSO
+static int32_t lsm6dso_platform_init(void) {
+    // MX_I2C1_Init() is called by main, so nothing specific here for now
+    return LSM6DSO_OK;
+}
+
+static int32_t lsm6dso_platform_deinit(void) {
+    // Optional: HAL_I2C_DeInit(&hi2c1);
+    return LSM6DSO_OK;
+}
+
+static int32_t lsm6dso_platform_write(uint16_t address, uint16_t reg, uint8_t *bufp, uint16_t len) {
+    if (HAL_I2C_Mem_Write(&hi2c1, address, reg, I2C_MEMADD_SIZE_8BIT, bufp, len, HAL_MAX_DELAY) == HAL_OK) {
+        return LSM6DSO_OK;
+    }
+    return LSM6DSO_ERROR;
+}
+
+static int32_t lsm6dso_platform_read(uint16_t address, uint16_t reg, uint8_t *bufp, uint16_t len) {
+    if (HAL_I2C_Mem_Read(&hi2c1, address, reg, I2C_MEMADD_SIZE_8BIT, bufp, len, HAL_MAX_DELAY) == HAL_OK) {
+        return LSM6DSO_OK;
+    }
+    return LSM6DSO_ERROR;
+}
 
 void calibrate_adxl375_offsets(void);
 
@@ -383,14 +381,16 @@ int main(void)
       sprintf(uart_buffer, "Found I2C device at address: 0x%02X\r\n", i);
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
-      /* // BMP390 specific check commented out
+      if (i == (ADXL375_ADDRESS >> 1)) {
+        sprintf(uart_buffer, "  --> This could be an ADXL375 sensor!\r\n");
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      }
       if (i == (BMP390_I2C_ADDRESS_LOW >> 1) || i == (BMP390_I2C_ADDRESS_HIGH >> 1)) {
         sprintf(uart_buffer, "  --> This could be a BMP390 sensor!\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
-      */
-      if (i == (ADXL375_ADDRESS >> 1)) {
-        sprintf(uart_buffer, "  --> This could be an ADXL375 sensor!\r\n");
+      if (i == (LSM6DSO_I2C_ADD_L >> 1) || i == (LSM6DSO_I2C_ADD_H >> 1)) { // Assuming LSM6DSO_I2C_ADD_H exists if SDO is high
+        sprintf(uart_buffer, "  --> This could be an LSM6DSO sensor!\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
     }
@@ -424,8 +424,50 @@ int main(void)
     // Optionally, call Error_Handler() or handle as appropriate
   }
 
-  /* // BMP390 Initialization and Configuration Code (Commented out)
-  // Initialize BMP390 using the new driver
+  // Initialize LSM6DSO
+  lsm6dso_io_ctx.Init = lsm6dso_platform_init;
+  lsm6dso_io_ctx.DeInit = lsm6dso_platform_deinit;
+  lsm6dso_io_ctx.BusType = LSM6DSO_I2C_BUS; // 0 for I2C
+  lsm6dso_io_ctx.Address = (LSM6DSO_I2C_ADD_H >> 1) << 1; // Try alternate 8-bit address (0x6B << 1 = 0xD6)
+  lsm6dso_io_ctx.WriteReg = lsm6dso_platform_write;
+  lsm6dso_io_ctx.ReadReg = lsm6dso_platform_read;
+  lsm6dso_io_ctx.GetTick = HAL_GetTick;
+  lsm6dso_io_ctx.Delay = HAL_Delay; // Use HAL_Delay for mdelay
+
+  sprintf(uart_buffer, "Initializing LSM6DSO...\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  if (LSM6DSO_RegisterBusIO(&lsm6dso_obj, &lsm6dso_io_ctx) != LSM6DSO_OK) {
+      sprintf(uart_buffer, "LSM6DSO Bus IO Registration FAILED!\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
+  }
+  
+  uint8_t lsm6dso_id = 0;
+  LSM6DSO_ReadID(&lsm6dso_obj, &lsm6dso_id);
+  sprintf(uart_buffer, "LSM6DSO Chip ID: 0x%02X (Expected: 0x6B)\r\n", lsm6dso_id); // LSM6DSO_WHO_AM_I is 0x6B
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+  if (lsm6dso_id == LSM6DSO_WHO_AM_I) {
+      if (LSM6DSO_Init(&lsm6dso_obj) != LSM6DSO_OK) {
+          sprintf(uart_buffer, "LSM6DSO Initialization FAILED!\r\n");
+          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
+      } else {
+          LSM6DSO_ACC_SetOutputDataRate(&lsm6dso_obj, 104.0f); // Set ODR (e.g., 104 Hz)
+          LSM6DSO_ACC_SetFullScale(&lsm6dso_obj, 4);      // Set full scale (e.g., +/- 4g)
+          LSM6DSO_ACC_Enable(&lsm6dso_obj);
+
+          LSM6DSO_GYRO_SetOutputDataRate(&lsm6dso_obj, 104.0f);
+          LSM6DSO_GYRO_SetFullScale(&lsm6dso_obj, 2000);   // Set full scale (e.g., +/- 2000 dps)
+          LSM6DSO_GYRO_Enable(&lsm6dso_obj);
+          sprintf(uart_buffer, "LSM6DSO Initialized and Enabled Successfully!\r\n");
+          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      }
+  } else {
+      sprintf(uart_buffer, "LSM6DSO Initialization FAILED! Chip ID Mismatch.\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      // Error_Handler(); // Decide if this is critical
+  }
+
+  // Initialize BMP390
   DRIVER_BMP390_LINK_INIT(&bmp390_handle, bmp390_handle_t);
   DRIVER_BMP390_LINK_IIC_INIT(&bmp390_handle, bmp390_i2c_interface_init);
   DRIVER_BMP390_LINK_IIC_DEINIT(&bmp390_handle, bmp390_i2c_interface_deinit);
@@ -433,147 +475,135 @@ int main(void)
   DRIVER_BMP390_LINK_IIC_WRITE(&bmp390_handle, bmp390_i2c_write);
   DRIVER_BMP390_LINK_DELAY_MS(&bmp390_handle, bmp390_delay_ms);
   DRIVER_BMP390_LINK_DEBUG_PRINT(&bmp390_handle, bmp390_debug_print);
-
-  // Link dummy SPI functions as well, even if not used, to satisfy driver checks
   DRIVER_BMP390_LINK_SPI_INIT(&bmp390_handle, bmp390_spi_interface_init);
   DRIVER_BMP390_LINK_SPI_DEINIT(&bmp390_handle, bmp390_spi_interface_deinit);
   DRIVER_BMP390_LINK_SPI_READ(&bmp390_handle, bmp390_spi_read);
   DRIVER_BMP390_LINK_SPI_WRITE(&bmp390_handle, bmp390_spi_write);
 
   bmp390_set_interface(&bmp390_handle, BMP390_INTERFACE_IIC);
-  // IMPORTANT: Set the correct I2C address based on your SDO/AD0 pin connection
-  bmp390_set_addr_pin(&bmp390_handle, BMP390_ADDRESS_ADO_HIGH); // Corrected: Use 0x77 as detected by scan
+  bmp390_set_addr_pin(&bmp390_handle, BMP390_ADDRESS_ADO_HIGH); // Assuming SDO is high for 0x77
 
-  sprintf(uart_buffer, "Initializing BMP390 (new driver)...\r\n");
+  sprintf(uart_buffer, "Initializing BMP390...\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
   if (bmp390_init(&bmp390_handle) != 0) {
-      sprintf(uart_buffer, "BMP390 new driver initialization FAILED!\r\n");
+      sprintf(uart_buffer, "BMP390 initialization FAILED!\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       Error_Handler();
   } else {
-      sprintf(uart_buffer, "BMP390 new driver initialized successfully!\r\n");
+      sprintf(uart_buffer, "BMP390 initialized successfully!\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
-      // Configure sensor settings
       sprintf(uart_buffer, "Configuring BMP390...\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-
-      if (bmp390_set_pressure_oversampling(&bmp390_handle, BMP390_OVERSAMPLING_x8) != 0) {
-          sprintf(uart_buffer, "BMP390: Failed to set pressure oversampling\r\n");
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
-      }
-      if (bmp390_set_temperature_oversampling(&bmp390_handle, BMP390_OVERSAMPLING_x1) != 0) {
-          sprintf(uart_buffer, "BMP390: Failed to set temperature oversampling\r\n");
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
-      }
-      if (bmp390_set_odr(&bmp390_handle, BMP390_ODR_25_HZ) != 0) { // 25 Hz ODR
-          sprintf(uart_buffer, "BMP390: Failed to set ODR\r\n");
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
-      }
-      if (bmp390_set_pressure(&bmp390_handle, BMP390_BOOL_TRUE) != 0) { // Enable pressure
-          sprintf(uart_buffer, "BMP390: Failed to enable pressure measurement\r\n");
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
-      }
-      if (bmp390_set_temperature(&bmp390_handle, BMP390_BOOL_TRUE) != 0) { // Enable temperature
-          sprintf(uart_buffer, "BMP390: Failed to enable temperature measurement\r\n");
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
-      }
+      bmp390_set_pressure_oversampling(&bmp390_handle, BMP390_OVERSAMPLING_x8);
+      bmp390_set_temperature_oversampling(&bmp390_handle, BMP390_OVERSAMPLING_x1);
+      bmp390_set_odr(&bmp390_handle, BMP390_ODR_25_HZ);
+      bmp390_set_pressure(&bmp390_handle, BMP390_BOOL_TRUE);
+      bmp390_set_temperature(&bmp390_handle, BMP390_BOOL_TRUE);
       if (bmp390_set_mode(&bmp390_handle, BMP390_MODE_NORMAL_MODE) != 0) {
           sprintf(uart_buffer, "BMP390: Failed to set normal mode!\r\n");
           HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
       } else {
-          sprintf(uart_buffer, "BMP390 configured for Normal Mode (P_OSR_x8, T_OSR_x1, ODR_25Hz).\r\n");
+          sprintf(uart_buffer, "BMP390 configured for Normal Mode.\r\n");
           HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
   }
 
-  HAL_Delay(200); // Wait for sensor to stabilize and take first readings after mode set
+  HAL_Delay(200); // Wait for sensors to stabilize
 
+  // BMP390 Altitude Calibration (using current altitude as 0m)
   float initial_pressure_pa_sum = 0;
-  float initial_temperature_c_sum = 0;
+  float initial_temperature_c_sum = 0; // Can be used for more accurate calib if desired
   int valid_calibration_readings = 0;
   uint32_t cal_raw_p, cal_raw_t;
-  float cal_p_pa, cal_t_c; // Pressure in Pa, Temp in Celsius
+  float cal_p_pa, cal_t_c;
 
   sprintf(uart_buffer, "Calibrating BMP390 for altitude (takes a few readings)...\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-
-  for (int i = 0; i < 5; i++) { // Take 5 readings for averaging
+  for (int i = 0; i < 5; i++) {
       if (bmp390_read_temperature_pressure(&bmp390_handle, &cal_raw_t, &cal_t_c, &cal_raw_p, &cal_p_pa) == 0) {
           initial_pressure_pa_sum += cal_p_pa;
-          initial_temperature_c_sum += cal_t_c;
+          initial_temperature_c_sum += cal_t_c; // Store temp for avg if needed
           valid_calibration_readings++;
-          sprintf(uart_buffer, "Calib reading %d: P=%.2f Pa, T=%.2f C\r\n", i + 1, cal_p_pa, cal_t_c);
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-      } else {
-          sprintf(uart_buffer, "Calibration reading %d failed.\r\n", i + 1);
-          HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
-      HAL_Delay(100); // Delay between readings (adjust based on ODR if necessary)
+      HAL_Delay(100); 
   }
-
   if (valid_calibration_readings > 0) {
       float avg_initial_pressure_pa = initial_pressure_pa_sum / valid_calibration_readings;
-      float avg_initial_temperature_c = initial_temperature_c_sum / valid_calibration_readings;
-      float known_initial_altitude_m = 0.0f; // Assume starting at 0m altitude for calibration
-
-      calibrate_sea_level_pressure_hpa(avg_initial_pressure_pa / 100.0f, known_initial_altitude_m); // Convert Pa to hPa
-
-      sprintf(uart_buffer, "BMP390 Calibrated. Avg P: %.2f Pa, Avg T: %.2f C. Sea Level P: %.2f hPa\r\n",
-              avg_initial_pressure_pa, avg_initial_temperature_c, sea_level_pressure_hpa);
+      calibrate_sea_level_pressure_hpa(avg_initial_pressure_pa / 100.0f, 0.0f); // 0.0m for current altitude
+      sprintf(uart_buffer, "BMP390 Calibrated. Sea Level P: %.2f hPa\r\n", sea_level_pressure_hpa);
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
   } else {
       sprintf(uart_buffer, "BMP390 Calibration failed. Using default sea level pressure (1013.25 hPa).\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       sea_level_pressure_hpa = 1013.25f; // Default
   }
-  */
   
-  // Turn on LED to indicate ready state
-  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); // LD2 is usually green or yellow.
+  HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* // BMP390 Data Reading Code (Commented out)
-    uint32_t raw_pressure, raw_temperature;
-    float pressure_pa, temperature_c;
-    float altitude_m;
+    // ADXL375 Data Reading
+    float adxl_ax_mps2, adxl_ay_mps2, adxl_az_mps2;
+    adxl375_read_xyz_mps2(&adxl_ax_mps2, &adxl_ay_mps2, &adxl_az_mps2);
+    // User changed sprintf format, respecting it
+    // sprintf(uart_buffer, "ADXL375: X=%.2f m/s^2, Y=%.2f m/s^2, Z=%.2f m/s^2\r\n",
+    //         adxl_ax_mps2, adxl_ay_mps2, adxl_az_mps2);
+    // HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
-    if (bmp390_read_temperature_pressure(&bmp390_handle, &raw_temperature, &temperature_c, &raw_pressure, &pressure_pa) == 0) {
-        float current_pressure_hpa = pressure_pa / 100.0f;
-        altitude_m = calculate_altitude_hpa(current_pressure_hpa);
+    // LSM6DSO Data Reading
+    int32_t lsm_read_status_acc = LSM6DSO_ACC_GetAxes(&lsm6dso_obj, &lsm6dso_acc_axes);
+    int32_t lsm_read_status_gyro = LSM6DSO_GYRO_GetAxes(&lsm6dso_obj, &lsm6dso_gyro_axes);
+    // Temperature reading for LSM6DSO requires a specific function if available in the driver,
+    // or reading temperature registers directly. For simplicity, assuming lsm6dso_reg.h might have temp reading helpers.
+    // For now, we focus on Acc and Gyro.
+    // lsm6dso_temperature_raw_get(&lsm6dso_obj.Ctx, &raw_temp);
+    // lsm6dso_temp_c = lsm6dso_from_lsb_to_celsius(raw_temp); // Example
 
-        sprintf(uart_buffer, "T: %.2f C, P: %.2f Pa, Alt: %.2f m\r\n",
-                temperature_c, pressure_pa, altitude_m);
+    // BMP390 Data Reading
+    uint32_t bmp_raw_pressure, bmp_raw_temperature;
+    float bmp_pressure_pa, bmp_temperature_c;
+    float bmp_altitude_m = 0.0f;
+    uint8_t bmp_read_status = bmp390_read_temperature_pressure(&bmp390_handle, &bmp_raw_temperature, &bmp_temperature_c, &bmp_raw_pressure, &bmp_pressure_pa);
+    if (bmp_read_status == 0) {
+        bmp_altitude_m = calculate_altitude_hpa(bmp_pressure_pa / 100.0f);
+    }
+
+    // Print all data
+    // ADXL375 (User format)
+    sprintf(uart_buffer, "%0.2f, %0.2f, %0.2f, ", adxl_ax_mps2, adxl_ay_mps2, adxl_az_mps2);
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
         
-        HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
+    // LSM6DSO
+    if (lsm_read_status_acc == LSM6DSO_OK && lsm_read_status_gyro == LSM6DSO_OK) {
+         // LSM6DSO_Axes_t are int32_t representing mg or mdps. Convert to float m/s^2 or dps.
+         // Sensitivity for LSM6DSO_ACC_GetAxes returns mg/LSB, but GetAxes already returns scaled int32_t.
+         // For ±4g FS, sensitivity is ~0.122 mg/LSB if GetAxesRaw was used. Here it's already in mg.
+         // For Gyro ±2000dps FS, sensitivity is 70 mdps/LSB. GetAxes already returns mdps.
+        sprintf(uart_buffer, "LSM_Acc: %ld, %ld, %ld mg, LSM_Gyro: %ld, %ld, %ld mdps, ",
+                lsm6dso_acc_axes.x, lsm6dso_acc_axes.y, lsm6dso_acc_axes.z,
+                lsm6dso_gyro_axes.x, lsm6dso_gyro_axes.y, lsm6dso_gyro_axes.z);
     } else {
-        sprintf(uart_buffer, "Error reading BMP390 (new driver)\r\n");
-        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-        HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_SET); // Turn on LD3 (usually red) for error
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET);
+        sprintf(uart_buffer, "LSM_Error, LSM_Error, ");
     }
-    */
-
-    // ADXL375 Data Reading
-    float ax_mps2, ay_mps2, az_mps2;
-    adxl375_read_xyz_mps2(&ax_mps2, &ay_mps2, &az_mps2);
-
-    sprintf(uart_buffer, "%0.2f, %0.2f, %0.2f\r\n",
-            ax_mps2, ay_mps2, az_mps2);
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    
+    // BMP390
+    if (bmp_read_status == 0) {
+        sprintf(uart_buffer, "BMP_T: %.2f C, BMP_P: %.2f Pa, BMP_Alt: %.2f m\r\n",
+                bmp_temperature_c, bmp_pressure_pa, bmp_altitude_m);
+    } else {
+        sprintf(uart_buffer, "BMP_Error\r\n");
+    }
     HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+        
+    HAL_GPIO_TogglePin(GPIOB, LD1_Pin); 
     
-    HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
-    
-    /* LSM6DSO code commented out as sensor is removed */
-    
-    HAL_Delay(200); // Delay for readability, adjust as needed. ADXL375 ODR is 100Hz by default.
+    HAL_Delay(500); // Delay for readability
     
     /* USER CODE END WHILE */
 
