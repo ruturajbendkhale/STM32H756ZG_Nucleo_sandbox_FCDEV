@@ -20,10 +20,11 @@
 #include "main.h"
 #include "string.h"
 #include <stdio.h>
-// #include "lsm6dso.h" // Commented out as LSM6DSO sensor is removed
+#include "lsm6dso.h" // Re-enable LSM6DSO include
 #include "driver_bmp390.h" // New BMP390 driver header
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
+#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -75,11 +76,61 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-// static stmdev_ctx_t dev_ctx; // Commented out LSM6DSO context
+static stmdev_ctx_t dev_ctx; // Re-enable LSM6DSO context
 
 bmp390_handle_t bmp390_handle;
 char uart_buffer[256]; // Increased buffer size
 float sea_level_pressure_hpa; // Store as hPa for altitude calculations
+
+#define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
+#define LSM6DSO_I2C_ADD_H 0x6B  // Alternative I2C address for LSM6DSO (0x6B when SDO/SA0 is connected to VDD)
+
+// Variables for LSM6DSO
+static int16_t data_raw_acceleration[3];
+static int16_t data_raw_angular_rate[3];
+static float acceleration_mg[3];
+static float angular_rate_mdps[3];
+static uint8_t whoamI_lsm, rst_lsm;
+
+
+// LSM6DSO functions re-enabled and corrected
+static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len)
+{
+  // Note: LSM6DSO_I2C_ADD_L is the 7-bit address. HAL functions expect the 8-bit address (7-bit shifted left).
+  if (HAL_I2C_Mem_Write((I2C_HandleTypeDef*)handle, (LSM6DSO_I2C_ADD_L << 1), reg, I2C_MEMADD_SIZE_8BIT, (uint8_t*)bufp, len, 1000) == HAL_OK) {
+    return 0;
+  }
+  return -1; // Return non-zero for error
+}
+
+static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t len)
+{
+  // Note: LSM6DSO_I2C_ADD_L is the 7-bit address. HAL functions expect the 8-bit address (7-bit shifted left).
+  if (HAL_I2C_Mem_Read((I2C_HandleTypeDef*)handle, (LSM6DSO_I2C_ADD_L << 1), reg, I2C_MEMADD_SIZE_8BIT, bufp, len, 1000) == HAL_OK) {
+    return 0;
+  }
+  return -1; // Return non-zero for error
+}
+
+
+// Reference sea level pressure (standard value is 1013.25 hPa = 1.01325 bar)
+// float sea_level_pressure_bar = 1.01325f; // Old, replaced by sea_level_pressure_hpa
+
+// Function to calibrate sea level pressure based on current altitude
+// void calibrate_sea_level_pressure(float current_pressure_bar, float known_altitude_meters) { // Old
+// Use the barometric formula to calculate the sea level pressure
+//  sea_level_pressure_bar = current_pressure_bar / 
+//                          powf((1.0f - (known_altitude_meters * 0.0000225577f)), 5.255877f);
+//}
+
+// Function to calculate altitude based on pressure and calibrated sea level pressure
+//float calculate_altitude(float pressure_bar) { // Old
+// Convert bar to Pa
+//  float pressure_pa = pressure_bar * 100000.0f;
+  
+// International barometric formula (accurate for altitudes < 11km)
+//  return 44330.0f * (1.0f - powf(pressure_pa / (sea_level_pressure_bar * 100000.0f), 0.1903f));
+//}
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -184,26 +235,29 @@ float calculate_altitude_hpa(float pressure_hpa) {
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// Define LSM6DSO_I2C_ADD_L for future use when LSM6DSO is re-integrated
-#define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
+// Helper functions to convert LSM6DSO raw data to physical units
+// These are added here to resolve linker errors if not found in the ST driver files linked.
+// Ensure these sensitivities match the configured Full-Scale settings for the sensor.
 
-// LSM6DSO functions kept but commented out for future use
-/*
-static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len)
+/**
+  * @brief  Converts raw accelerometer data from LSM6DSO to mg.
+  * @param  lsb Raw data from the sensor.
+  * @retval Acceleration in mg.
+  */
+static float lsm6dso_from_fs2g_to_mg(int16_t lsb)
 {
-  HAL_I2C_Mem_Write((I2C_HandleTypeDef*)handle, LSM6DSO_I2C_ADD_L, reg, I2C_MEMADD_SIZE_8BIT, (uint8_t*)bufp, len, 1000);
-  return 0;
+  return (float)lsb * 0.061f; // Sensitivity for +/-2g full scale
 }
 
-static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t len)
+/**
+  * @brief  Converts raw gyroscope data from LSM6DSO to mdps.
+  * @param  lsb Raw data from the sensor.
+  * @retval Angular rate in mdps.
+  */
+static float lsm6dso_from_fs250dps_to_mdps(int16_t lsb)
 {
-  HAL_I2C_Mem_Read((I2C_HandleTypeDef*)handle, LSM6DSO_I2C_ADD_L, reg, I2C_MEMADD_SIZE_8BIT, bufp, len, 1000);
-  return 0;
+  return (float)lsb * 8.75f; // Sensitivity for +/-250dps full scale
 }
-*/
-
-// Reference sea level pressure (standard value is 1013.25 hPa = 1.01325 bar)
-// float sea_level_pressure_bar = 1.01325f; // Old, replaced by sea_level_pressure_hpa
 
 // Function to calibrate sea level pressure based on current altitude
 // void calibrate_sea_level_pressure(float current_pressure_bar, float known_altitude_meters) { // Old
@@ -294,6 +348,46 @@ int main(void)
     sprintf(uart_buffer, "Found %d I2C devices in total.\r\n", i2c_devices_found);
     HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
   }
+
+  // Initialize LSM6DSO
+  sprintf(uart_buffer, "Initializing LSM6DSO...\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+  dev_ctx.write_reg = platform_write;
+  dev_ctx.read_reg = platform_read;
+  dev_ctx.handle = &hi2c1;
+
+  // Check device ID
+  lsm6dso_device_id_get(&dev_ctx, &whoamI_lsm);
+  if (whoamI_lsm == LSM6DSO_WHO_AM_I) {
+    sprintf(uart_buffer, "LSM6DSO WHO_AM_I is OK: 0x%02X\r\n", whoamI_lsm);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  } else {
+    sprintf(uart_buffer, "LSM6DSO WHO_AM_I FAILED! Expected 0x%02X, got 0x%02X\r\n", LSM6DSO_WHO_AM_I, whoamI_lsm);
+    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    // Error_Handler(); // Decide if this is fatal
+  }
+
+  // Restore default configuration
+  lsm6dso_reset_set(&dev_ctx, PROPERTY_ENABLE);
+  do {
+    lsm6dso_reset_get(&dev_ctx, &rst_lsm);
+  } while (rst_lsm);
+
+  // Enable Block Data Update
+  lsm6dso_block_data_update_set(&dev_ctx, PROPERTY_ENABLE);
+
+  // Set Output Data Rate for Accelerometer and Gyroscope
+  lsm6dso_xl_data_rate_set(&dev_ctx, LSM6DSO_XL_ODR_104Hz); // 104 Hz ODR for Accelerometer
+  lsm6dso_gy_data_rate_set(&dev_ctx, LSM6DSO_GY_ODR_104Hz); // 104 Hz ODR for Gyroscope
+
+  // Set Full Scale for Accelerometer and Gyroscope
+  lsm6dso_xl_full_scale_set(&dev_ctx, LSM6DSO_2g);    // +/- 2g Full Scale for Accelerometer
+  lsm6dso_gy_full_scale_set(&dev_ctx, LSM6DSO_250dps); // +/- 250 dps Full Scale for Gyroscope
+
+  sprintf(uart_buffer, "LSM6DSO Initialized and Configured (XL:104Hz/2g, GY:104Hz/250dps).\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
 
   // Initialize BMP390 using the new driver
   DRIVER_BMP390_LINK_INIT(&bmp390_handle, bmp390_handle_t);
@@ -412,11 +506,54 @@ int main(void)
     float pressure_pa, temperature_c;
     float altitude_m;
 
+    // Read LSM6DSO data
+    uint8_t reg_lsm;
+    lsm6dso_status_reg_get(&dev_ctx, &reg_lsm);
+
+    if (reg_lsm & 0x01) { // Check XLDA bit
+      lsm6dso_acceleration_raw_get(&dev_ctx, data_raw_acceleration);
+      acceleration_mg[0] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[0]);
+      acceleration_mg[1] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[1]);
+      acceleration_mg[2] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[2]);
+
+      sprintf(uart_buffer, "LSM6DSO Acc: X=%.2f mg, Y=%.2f mg, Z=%.2f mg",
+              acceleration_mg[0], acceleration_mg[1], acceleration_mg[2]);
+      // Check GDA bit for Gyro
+      if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
+          lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
+          angular_rate_mdps[0] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[0]);
+          angular_rate_mdps[1] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[1]);
+          angular_rate_mdps[2] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[2]);
+          // Append Gyro data to the existing Accel data in uart_buffer
+          snprintf(uart_buffer + strlen(uart_buffer), sizeof(uart_buffer) - strlen(uart_buffer), " | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
+                  angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
+      } else {
+          // Append "Gyro Not Ready" to the existing Accel data
+          snprintf(uart_buffer + strlen(uart_buffer), sizeof(uart_buffer) - strlen(uart_buffer), " | Gyro: Not Ready\r\n");
+      }
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    } else {
+        // Accelerometer data not ready, check if Gyro data is ready
+        if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
+            lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
+            angular_rate_mdps[0] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[0]);
+            angular_rate_mdps[1] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[1]);
+            angular_rate_mdps[2] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[2]);
+            snprintf(uart_buffer, sizeof(uart_buffer), "LSM6DSO Acc: Not Ready | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
+                  angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
+            HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+        } else {
+            // Neither Accel nor Gyro data is ready
+            // snprintf(uart_buffer, sizeof(uart_buffer), "LSM6DSO Acc/Gyro: Not Ready\r\n");
+            // HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+        }
+    }
+
     if (bmp390_read_temperature_pressure(&bmp390_handle, &raw_temperature, &temperature_c, &raw_pressure, &pressure_pa) == 0) {
         float current_pressure_hpa = pressure_pa / 100.0f;
         altitude_m = calculate_altitude_hpa(current_pressure_hpa);
 
-        sprintf(uart_buffer, "T: %.2f C, P: %.2f Pa, Alt: %.2f m\r\n",
+        snprintf(uart_buffer, sizeof(uart_buffer), "BMP390 T: %.2f C, P: %.2f Pa, Alt: %.2f m\r\n",
                 temperature_c, pressure_pa, altitude_m);
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
         
@@ -429,10 +566,10 @@ int main(void)
         HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET);
     }
     
-    /* LSM6DSO code commented out as sensor is removed */
+    // LSM6DSO code commented out as sensor is removed // This comment can be removed now.
     
     HAL_Delay(40); // Corresponds to 25Hz ODR. (1000ms / 25Hz = 40ms)
-                   // Or a bit longer if UART transmission takes time: HAL_Delay(200);
+                   // Or a bit longer if UART transmission takes time: HAL_Delay(100); // Adjusted for potentially more UART data.
     
     /* USER CODE END WHILE */
 
