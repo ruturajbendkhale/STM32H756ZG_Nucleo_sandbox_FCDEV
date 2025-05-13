@@ -244,9 +244,10 @@ float calculate_altitude_hpa(float pressure_hpa) {
   * @param  lsb Raw data from the sensor.
   * @retval Acceleration in mg.
   */
-static float lsm6dso_from_fs2g_to_mg(int16_t lsb)
+static float lsm6dso_from_fs16g_to_mg(int16_t lsb)
 {
-  return (float)lsb * 0.061f; // Sensitivity for +/-2g full scale
+  // Apply a 2x correction factor - the sensor is reporting ~half the expected values
+  return (float)lsb * 0.488f * 2.0f; // Sensitivity for +/-16g full scale with 2x correction
 }
 
 /**
@@ -257,6 +258,26 @@ static float lsm6dso_from_fs2g_to_mg(int16_t lsb)
 static float lsm6dso_from_fs250dps_to_mdps(int16_t lsb)
 {
   return (float)lsb * 8.75f; // Sensitivity for +/-250dps full scale
+}
+
+/**
+  * @brief  Converts raw accelerometer data from LSM6DSO to mg.
+  * @param  lsb Raw data from the sensor.
+  * @retval Acceleration in mg.
+  */
+static float lsm6dso_from_fs32g_to_mg(int16_t lsb)
+{
+  return (float)lsb * 0.976f; // Sensitivity for +/-32g full scale (0.976 mg/LSB)
+}
+
+/**
+  * @brief  Converts raw gyroscope data from LSM6DSO to mdps.
+  * @param  lsb Raw data from the sensor.
+  * @retval Angular rate in mdps.
+  */
+static float lsm6dso_from_fs2000dps_to_mdps(int16_t lsb)
+{
+  return (float)lsb * 70.0f; // Sensitivity for +/-2000dps full scale (70 mdps/LSB)
 }
 
 // Function to calibrate sea level pressure based on current altitude
@@ -382,10 +403,31 @@ int main(void)
   lsm6dso_gy_data_rate_set(&dev_ctx, LSM6DSO_GY_ODR_104Hz); // 104 Hz ODR for Gyroscope
 
   // Set Full Scale for Accelerometer and Gyroscope
-  lsm6dso_xl_full_scale_set(&dev_ctx, LSM6DSO_2g);    // +/- 2g Full Scale for Accelerometer
-  lsm6dso_gy_full_scale_set(&dev_ctx, LSM6DSO_250dps); // +/- 250 dps Full Scale for Gyroscope
+  lsm6dso_xl_full_scale_set(&dev_ctx, LSM6DSO_16g);    // +/- 16g Full Scale for Accelerometer
+  lsm6dso_gy_full_scale_set(&dev_ctx, LSM6DSO_2000dps); // +/- 2000 dps Full Scale for Gyroscope
 
-  sprintf(uart_buffer, "LSM6DSO Initialized and Configured (XL:104Hz/2g, GY:104Hz/250dps).\r\n");
+  // Make sure xl_fs_mode is set to 0 to ensure 16g works correctly
+  uint8_t ctrl8_xl_val = 0;
+  lsm6dso_read_reg(&dev_ctx, LSM6DSO_CTRL8_XL, &ctrl8_xl_val, 1);
+  // Clear the xl_fs_mode bit (bit 1) to ensure proper 16g operation
+  ctrl8_xl_val &= ~(1 << 1);
+  lsm6dso_write_reg(&dev_ctx, LSM6DSO_CTRL8_XL, &ctrl8_xl_val, 1);
+  
+  // ---- START DEBUG: Read back CTRL1_XL and CTRL8_XL ----
+  uint8_t ctrl1_xl_val = 0;
+  if (lsm6dso_read_reg(&dev_ctx, LSM6DSO_CTRL1_XL, &ctrl1_xl_val, 1) == 0) {
+    sprintf(uart_buffer, "LSM6DSO CTRL1_XL after set: 0x%02X\r\n", ctrl1_xl_val);
+  } else {
+    sprintf(uart_buffer, "LSM6DSO Failed to read CTRL1_XL\r\n");
+  }
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  
+  lsm6dso_read_reg(&dev_ctx, LSM6DSO_CTRL8_XL, &ctrl8_xl_val, 1);
+  sprintf(uart_buffer, "LSM6DSO CTRL8_XL after set: 0x%02X\r\n", ctrl8_xl_val);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  // ---- END DEBUG ----
+
+  sprintf(uart_buffer, "LSM6DSO Initialized and Configured (XL:104Hz/16g, GY:104Hz/2000dps).\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
 
@@ -512,18 +554,18 @@ int main(void)
 
     if (reg_lsm & 0x01) { // Check XLDA bit
       lsm6dso_acceleration_raw_get(&dev_ctx, data_raw_acceleration);
-      acceleration_mg[0] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[0]);
-      acceleration_mg[1] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[1]);
-      acceleration_mg[2] = lsm6dso_from_fs2g_to_mg(data_raw_acceleration[2]);
+      acceleration_mg[0] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[0]);
+      acceleration_mg[1] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[1]);
+      acceleration_mg[2] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[2]);
 
       sprintf(uart_buffer, "LSM6DSO Acc: X=%.2f mg, Y=%.2f mg, Z=%.2f mg",
               acceleration_mg[0], acceleration_mg[1], acceleration_mg[2]);
       // Check GDA bit for Gyro
       if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
           lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
-          angular_rate_mdps[0] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[0]);
-          angular_rate_mdps[1] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[1]);
-          angular_rate_mdps[2] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[2]);
+          angular_rate_mdps[0] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
+          angular_rate_mdps[1] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
+          angular_rate_mdps[2] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
           // Append Gyro data to the existing Accel data in uart_buffer
           snprintf(uart_buffer + strlen(uart_buffer), sizeof(uart_buffer) - strlen(uart_buffer), " | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
                   angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
@@ -536,9 +578,9 @@ int main(void)
         // Accelerometer data not ready, check if Gyro data is ready
         if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
             lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
-            angular_rate_mdps[0] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[0]);
-            angular_rate_mdps[1] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[1]);
-            angular_rate_mdps[2] = lsm6dso_from_fs250dps_to_mdps(data_raw_angular_rate[2]);
+            angular_rate_mdps[0] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
+            angular_rate_mdps[1] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
+            angular_rate_mdps[2] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
             snprintf(uart_buffer, sizeof(uart_buffer), "LSM6DSO Acc: Not Ready | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
                   angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
             HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
