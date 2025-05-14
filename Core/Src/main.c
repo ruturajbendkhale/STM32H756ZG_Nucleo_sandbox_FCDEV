@@ -26,6 +26,7 @@
 #include <stdarg.h>        // For vsnprintf in debug print
 #include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
 #include "adxl375.h"     // Add ADXL375 support
+#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -41,6 +42,10 @@
 /* USER CODE BEGIN PD */
 #define BMP390_I2C_ADDRESS_LOW (0x76 << 1) // Default I2C address for BMP390 when SDO is low
 #define BMP390_I2C_ADDRESS_HIGH (0x77 << 1) // I2C address for BMP390 when SDO is high
+#define TARGET_LOOP_PERIOD_MS 10 // For 100Hz sampling frequency (1000ms / 100Hz = 10ms)
+
+// Define this to print all sensor data, comment it out to print only loop execution time
+//#define PRINT_FULL_SENSOR_DATA 
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -93,6 +98,16 @@ static float acceleration_mg[3];
 static float angular_rate_mdps[3];
 static uint8_t whoamI_lsm, rst_lsm;
 
+static float latest_bmp_temp_c = 0.0f; // Stores the 1Hz temperature reading
+static uint16_t bmp_temp_read_counter = 0;
+const uint16_t BMP_TEMP_READ_INTERVAL = 100; // For 1Hz update (100 loops * 10ms/loop = 1000ms)
+
+// Counter for scheduling BMP390 reads every 20ms (2 loop cycles)
+static uint8_t bmp390_read_scheduler = 0;
+
+// Persistent storage for last good BMP390 pressure and altitude
+static float persistent_bmp_pres_pa = 0.0f;
+static float persistent_bmp_alt_m = 0.0f;
 
 // LSM6DSO functions re-enabled and corrected
 static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len)
@@ -113,7 +128,6 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t 
   return -1; // Return non-zero for error
 }
 
-
 // Reference sea level pressure (standard value is 1013.25 hPa = 1.01325 bar)
 // float sea_level_pressure_bar = 1.01325f; // Old, replaced by sea_level_pressure_hpa
 
@@ -132,6 +146,11 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t 
 // International barometric formula (accurate for altitudes < 11km)
 //  return 44330.0f * (1.0f - powf(pressure_pa / (sea_level_pressure_bar * 100000.0f), 0.1903f));
 //}
+
+// At the top of your file, declare a variable for LED blink timing
+static uint32_t led3_last_toggle_time = 0; // Last time LED3 was toggled
+const uint32_t led3_blink_interval = 200; // Blink interval in milliseconds
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -210,8 +229,9 @@ void bmp390_debug_print(const char *const fmt, ...) {
     vsnprintf(dbg_buffer, sizeof(dbg_buffer), fmt, args);
     va_end(args);
     // Direct transmit is simpler if buffer is managed carefully
-    HAL_UART_Transmit(&huart3, (uint8_t*)"BMP390_DBG: ", 12, HAL_MAX_DELAY);
-    HAL_UART_Transmit(&huart3, (uint8_t*)dbg_buffer, strlen(dbg_buffer), HAL_MAX_DELAY);
+    // HAL_UART_Transmit(&huart3, (uint8_t*)"BMP390_DBG: ", 12, HAL_MAX_DELAY);
+    // HAL_UART_Transmit(&huart3, (uint8_t*)dbg_buffer, strlen(dbg_buffer), HAL_MAX_DELAY);
+    (void)dbg_buffer; // Suppress unused variable warning if UART lines are commented
 }
 
 
@@ -471,8 +491,8 @@ int main(void)
           sprintf(uart_buffer, "BMP390: Failed to set temperature oversampling\r\n");
           HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
       }
-      if (bmp390_set_odr(&bmp390_handle, BMP390_ODR_25_HZ) != 0) { // 25 Hz ODR
-          sprintf(uart_buffer, "BMP390: Failed to set ODR\r\n");
+      if (bmp390_set_odr(&bmp390_handle, BMP390_ODR_25_HZ) != 0) { // Revert to 25 Hz ODR
+          sprintf(uart_buffer, "BMP390: Failed to set ODR to 25Hz\r\n");
           HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY); Error_Handler();
       }
       if (bmp390_set_pressure(&bmp390_handle, BMP390_BOOL_TRUE) != 0) { // Enable pressure
@@ -622,87 +642,137 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    uint32_t raw_pressure, raw_temperature;
-    float pressure_pa, temperature_c;
-    float altitude_m;
+    uint32_t loop_start_tick = HAL_GetTick(); // Record start time of the loop
+
+    uint32_t raw_pressure; // raw_temperature is still needed for the function call
+    uint32_t local_raw_temperature; // Use a distinct local variable for the raw temperature param
+
+    // Sensor values
+    float lsm_acc_x = 0.0f, lsm_acc_y = 0.0f, lsm_acc_z = 0.0f;
+    float lsm_gyr_x = 0.0f, lsm_gyr_y = 0.0f, lsm_gyr_z = 0.0f;
+    float bmp_temp_c = 0.0f, bmp_pres_pa = 0.0f, bmp_alt_m = 0.0f;
+    float adxl_hi_g_x = 0.0f, adxl_hi_g_y = 0.0f, adxl_hi_g_z = 0.0f;
+
+    bool lsm_accel_data_ready = false;
+    bool lsm_gyro_data_ready = false;
+    bool bmp_data_ok = false; // Initialize to false for this cycle
 
     // Read LSM6DSO data
     uint8_t reg_lsm;
     lsm6dso_status_reg_get(&dev_ctx, &reg_lsm);
 
     if (reg_lsm & 0x01) { // Check XLDA bit
+      lsm_accel_data_ready = true;
       lsm6dso_acceleration_raw_get(&dev_ctx, data_raw_acceleration);
-      acceleration_mg[0] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[0]);
-      acceleration_mg[1] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[1]);
-      acceleration_mg[2] = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[2]);
+      lsm_acc_x = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[0]);
+      lsm_acc_y = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[1]);
+      lsm_acc_z = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[2]);
+    }
 
-      sprintf(uart_buffer, "LSM6DSO Acc: X=%.2f mg, Y=%.2f mg, Z=%.2f mg",
-              acceleration_mg[0], acceleration_mg[1], acceleration_mg[2]);
-      // Check GDA bit for Gyro
-      if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
-          lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
-          angular_rate_mdps[0] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
-          angular_rate_mdps[1] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
-          angular_rate_mdps[2] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
-          // Append Gyro data to the existing Accel data in uart_buffer
-          snprintf(uart_buffer + strlen(uart_buffer), sizeof(uart_buffer) - strlen(uart_buffer), " | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
-                  angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
-      } else {
-          // Append "Gyro Not Ready" to the existing Accel data
-          snprintf(uart_buffer + strlen(uart_buffer), sizeof(uart_buffer) - strlen(uart_buffer), " | Gyro: Not Ready\r\n");
-      }
-      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-    } else {
-        // Accelerometer data not ready, check if Gyro data is ready
-        if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
-            lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
-            angular_rate_mdps[0] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
-            angular_rate_mdps[1] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
-            angular_rate_mdps[2] = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
-            snprintf(uart_buffer, sizeof(uart_buffer), "LSM6DSO Acc: Not Ready | Gyro: X=%.2f mdps, Y=%.2f mdps, Z=%.2f mdps\r\n",
-                  angular_rate_mdps[0], angular_rate_mdps[1], angular_rate_mdps[2]);
-            HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+    if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
+      lsm_gyro_data_ready = true;
+      lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
+      lsm_gyr_x = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
+      lsm_gyr_y = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
+      lsm_gyr_z = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
+    }
+
+    // Read BMP390 data only every other cycle (20ms interval if loop is 10ms)
+    if (bmp390_read_scheduler == 0) {
+        float func_temp_c, func_pres_pa; // Local variables for the values read from the function
+        if (bmp390_read_temperature_pressure(&bmp390_handle, &local_raw_temperature, &func_temp_c, &raw_pressure, &func_pres_pa) == 0) {
+            bmp_data_ok = true; // Indicates data read attempt was successful for this cycle
+            persistent_bmp_pres_pa = func_pres_pa; // Update persistent pressure
+            float current_pressure_hpa = persistent_bmp_pres_pa / 100.0f;
+            persistent_bmp_alt_m = calculate_altitude_hpa(current_pressure_hpa); // Update persistent altitude
+
+            // Temperature reading is no longer updated or used here actively
+            HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
         } else {
-            // Neither Accel nor Gyro data is ready
-            // snprintf(uart_buffer, sizeof(uart_buffer), "LSM6DSO Acc/Gyro: Not Ready\r\n");
-            // HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+            // bmp_data_ok remains false, set by initialization
+            HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_SET); // Turn on LD3 (usually red) for error
+            HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET); // Blink error LED
+        }
+    }
+    // On other cycles, bmp_data_ok remains false, and old bmp_pres_pa, bmp_alt_m are used if printed.
+
+    bmp390_read_scheduler++;
+    if (bmp390_read_scheduler >= 2) { // Reset every 2 cycles
+        bmp390_read_scheduler = 0;
+    }
+
+    // Read ADXL375 high-g accelerometer (±200g range)
+    int16_t adxl_raw_x, adxl_raw_y, adxl_raw_z;
+    adxl375_read_xyz(&adxl_raw_x, &adxl_raw_y, &adxl_raw_z);
+    adxl_hi_g_x = (float)adxl_raw_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f); 
+    adxl_hi_g_y = (float)adxl_raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
+    adxl_hi_g_z = (float)adxl_raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
+    
+    uint32_t loop_end_tick = HAL_GetTick();
+    uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
+
+    // Check if execution time exceeds 10ms
+    if (execution_time_ms >= TARGET_LOOP_PERIOD_MS) {
+        // Blink LED3 if the execution time exceeds 10ms
+        if (HAL_GetTick() - led3_last_toggle_time >= led3_blink_interval) {
+            HAL_GPIO_TogglePin(GPIOB, LD3_Pin); // Toggle LED3
+            led3_last_toggle_time = HAL_GetTick(); // Update last toggle time
         }
     }
 
-    if (bmp390_read_temperature_pressure(&bmp390_handle, &raw_temperature, &temperature_c, &raw_pressure, &pressure_pa) == 0) {
-        float current_pressure_hpa = pressure_pa / 100.0f;
-        altitude_m = calculate_altitude_hpa(current_pressure_hpa);
+    // Consolidate UART output
+    int_fast16_t current_len = 0;
 
-        snprintf(uart_buffer, sizeof(uart_buffer), "BMP390 T: %.2f C, P: %.2f Pa, Alt: %.2f m\r\n",
-                temperature_c, pressure_pa, altitude_m);
-        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-        
-        HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
+#ifdef PRINT_FULL_SENSOR_DATA
+    // LSM6DSO Output
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "A:");
+    if (lsm_accel_data_ready) {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "%.1f,%.1f,%.1f", lsm_acc_x, lsm_acc_y, lsm_acc_z);
     } else {
-        sprintf(uart_buffer, "Error reading BMP390 (new driver)\r\n");
-        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-        HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_SET); // Turn on LD3 (usually red) for error
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_RESET);
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "NR,NR,NR");
     }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, " G:");
+    if (lsm_gyro_data_ready) {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "%.1f,%.1f,%.1f", lsm_gyr_x, lsm_gyr_y, lsm_gyr_z);
+    } else {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "NR,NR,NR");
+    }
+
+    // BMP390 Output
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|B:");
+    // Always print the persistent (last good) pressure and altitude values.
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "P%.0f,Alt%.1f", persistent_bmp_pres_pa, persistent_bmp_alt_m);
+    // No ERR_B, print values. If read failed or was skipped, these are the last good ones.
+    // If you want an indicator for stale data, you could add it here based on bmp_data_ok for the *current* cycle:
+    // if (!bmp_data_ok && bmp390_read_scheduler == 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "!"); }
+
+    // ADXL375 Output
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|H:%.1f,%.1f,%.1f", adxl_hi_g_x, adxl_hi_g_y, adxl_hi_g_z);
     
-    // Read ADXL375 high-g accelerometer (±200g range)
-    int16_t adxl_raw_x, adxl_raw_y, adxl_raw_z;
-    float adxl_x_g, adxl_y_g, adxl_z_g;
-    
-    adxl375_read_xyz(&adxl_raw_x, &adxl_raw_y, &adxl_raw_z);
-    
-    // Convert to g (using 49 mg/LSB sensitivity from the header)
-    adxl_x_g = (float)adxl_raw_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f); 
-    adxl_y_g = (float)adxl_raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
-    adxl_z_g = (float)adxl_raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
-    
-    snprintf(uart_buffer, sizeof(uart_buffer), "ADXL375 High-G: X=%.2f g, Y=%.2f g, Z=%.2f g\r\n", 
-            adxl_x_g, adxl_y_g, adxl_z_g);
-    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-    
-    HAL_Delay(40); // Corresponds to 25Hz ODR. (1000ms / 25Hz = 40ms)
-                   // Or a bit longer if UART transmission takes time: HAL_Delay(100); // Adjusted for potentially more UART data.
+    // Add a separator before loop time if full data is printed
+    if (current_len > 0) { // Only add separator if other data was printed
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|");
+    }
+#endif // PRINT_FULL_SENSOR_DATA
+
+    // Loop Time Output (always printed)
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "L:%lums%s\r\n",
+                            execution_time_ms,
+                            (execution_time_ms >= TARGET_LOOP_PERIOD_MS && execution_time_ms != 0) ? " OV!" : "");
+
+    if (current_len > 0 && (size_t)current_len < sizeof(uart_buffer)) { // Check if anything was written and buffer not overflowed by snprintf
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, current_len, HAL_MAX_DELAY);
+    } else if ((size_t)current_len >= sizeof(uart_buffer)) {
+        // Handle potential truncation / error in string formatting if buffer was too small
+        char err_msg[] = "UART buffer overflow!\r\n";
+        HAL_UART_Transmit(&huart3, (uint8_t*)err_msg, strlen(err_msg), HAL_MAX_DELAY);
+    }
+
+
+    if (execution_time_ms < TARGET_LOOP_PERIOD_MS) {
+      uint32_t delay_ms = TARGET_LOOP_PERIOD_MS - execution_time_ms;
+      HAL_Delay(delay_ms);
+    }
     
     /* USER CODE END WHILE */
 
