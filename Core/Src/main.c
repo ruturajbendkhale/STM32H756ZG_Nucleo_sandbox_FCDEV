@@ -24,9 +24,9 @@
 #include "driver_bmp390.h" // New BMP390 driver header
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
-#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
+#include "flight_phases.h" // Flight phases header#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
 #include "adxl375.h"     // Add ADXL375 support
-
+#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -616,6 +616,11 @@ int main(void)
   // Turn on LED to indicate ready state
   HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); // LD2 is usually green or yellow.
   
+   // Define the flight state machine instance
+  flight_fsm_t fsm_state = {
+      .flight_state = READY, // Initial state
+      .memory = {0, 0, 0}    // Initialize memory
+  };  
   /* USER CODE END 2 */
 
   /* Infinite loop */
