@@ -5,6 +5,7 @@
 #include <stdint.h> // For standard integer types
 #include <math.h> // For mathematical functions
 
+
 typedef float float32_t;
 typedef struct {
     float x;
@@ -20,7 +21,6 @@ typedef struct {
 
 typedef struct {
     float liftoff_acc_threshold;
-    // Add other settings as needed
 } control_settings_t;
 
 typedef enum {
@@ -46,7 +46,9 @@ typedef enum {
 typedef struct {
     flight_fsm_e flight_state;
     float32_t memory[3]; // Adjust size as needed
-    // Add other necessary fields
+    uint8_t state_changed; // Add this line to track state changes
+    uint32_t thrust_trigger_time;
+    uint32_t iteration_count; // Add this line to count iterations
 } flight_fsm_t;
 
 // Function prototypes
