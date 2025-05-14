@@ -28,6 +28,8 @@
 #include "adxl375.h"     // Add ADXL375 support
 #include <stdbool.h>
 #include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
+#include "flight_phases.h" // Flight phases header
+#include "kalman_filter.h" // Kalman filter header
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
