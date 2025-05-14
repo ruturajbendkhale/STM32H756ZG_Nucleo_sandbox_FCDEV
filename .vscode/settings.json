@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "lsm6dso.h": "c"
+        "lsm6dso.h": "c",
+        "adxl375.h": "c",
+        "lsm6dso_reg.h": "c"
     }
 }

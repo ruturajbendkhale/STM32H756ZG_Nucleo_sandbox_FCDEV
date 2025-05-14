@@ -24,10 +24,12 @@
 #include "driver_bmp390.h" // New BMP390 driver header
 #include <math.h>          // For powf in altitude calculation
 #include <stdarg.h>        // For vsnprintf in debug print
-#include "flight_phases.h" // Flight phases header#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
+#include "flight_phases.h" // Flight phases header
+#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
 #include "adxl375.h"     // Add ADXL375 support
 #include <stdbool.h>
-#include "lsm6dso_reg.h" // For LSM6DSO_WHO_AM_I
+#include "arm_math.h"    // For CMSIS-DSP functions
+#include "kalman_filter.h" // Include the new Kalman filter header
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -150,6 +152,8 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t 
 // At the top of your file, declare a variable for LED blink timing
 static uint32_t led3_last_toggle_time = 0; // Last time LED3 was toggled
 const uint32_t led3_blink_interval = 200; // Blink interval in milliseconds
+
+static kalman_filter_state_t kf_vertical_state; // Kalman filter instance
 
 /* USER CODE END PV */
 
@@ -641,6 +645,18 @@ int main(void)
       .flight_state = READY, // Initial state
       .memory = {0, 0, 0}    // Initialize memory
   };  
+
+  // After BMP390 calibration and sea_level_pressure_hpa is set:
+  if (sea_level_pressure_hpa > 0) { // Check if BMP calibration was successful
+      kalman_filter_init_custom(&kf_vertical_state, persistent_bmp_alt_m); // Use last read altitude as initial
+  } else {
+      kalman_filter_init_custom(&kf_vertical_state, 0.0f); // Default to 0m if BMP cal failed
+      sprintf(uart_buffer, "WARN: BMP cal failed, KF init alt 0m.\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  }
+  
+  sprintf(uart_buffer, "Kalman Filter Initialized from main.c. dt: %.3fs\\r\\n", kf_vertical_state.t_sampl_s);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -713,6 +729,23 @@ int main(void)
     adxl_hi_g_y = (float)adxl_raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
     adxl_hi_g_z = (float)adxl_raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
     
+    // Prepare inputs for Kalman Filter
+    // Assuming lsm_acc_z is in mg, Z-axis pointing UP (reads ~+1000mg when static due to gravity)
+    // Convert to m/s^2 and remove gravity component.
+    // Make sure lsm_acc_z is updated every loop correctly if lsm_accel_data_ready is true.
+    float current_lsm_acc_z_mg = 0.0f; // Default to 0 if not ready to avoid using stale data
+    if(lsm_accel_data_ready) {
+        current_lsm_acc_z_mg = lsm_acc_z;
+    }
+    float measured_vertical_acceleration_input_mps2 = (current_lsm_acc_z_mg - 1000.0f) * (9.80665f / 1000.0f);
+    float current_baro_altitude_m = persistent_bmp_alt_m;
+
+
+    // Run Kalman Filter
+    kalman_filter_predict_custom(&kf_vertical_state, measured_vertical_acceleration_input_mps2);
+    kalman_filter_update_custom(&kf_vertical_state, current_baro_altitude_m);
+
+
     uint32_t loop_end_tick = HAL_GetTick();
     uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
 
@@ -753,6 +786,12 @@ int main(void)
 
     // ADXL375 Output
     current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|H:%.1f,%.1f,%.1f", adxl_hi_g_x, adxl_hi_g_y, adxl_hi_g_z);
+    
+    // Add Kalman Filter estimates to UART output
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|KF:A%.1f,V%.2f,B%.3f",
+                            kf_vertical_state.x_bar_data[0], // Estimated Altitude
+                            kf_vertical_state.x_bar_data[1], // Estimated Velocity
+                            kf_vertical_state.x_bar_data[2]);// Estimated Accel Bias
     
     // Add a separator before loop time if full data is printed
     if (current_len > 0) { // Only add separator if other data was printed

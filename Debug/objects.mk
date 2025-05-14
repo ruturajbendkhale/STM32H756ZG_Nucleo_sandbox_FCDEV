@@ -5,5 +5,5 @@
 
 USER_OBJS :=
 
-LIBS :=
+LIBS := -larm_cortexM7l_math -llibarm_cortexM7l_math -llibarm_cortexM7lfsp_math
 

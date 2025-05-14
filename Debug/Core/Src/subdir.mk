@@ -7,6 +7,8 @@
 C_SRCS += \
 ../Core/Src/adxl375.c \
 ../Core/Src/driver_bmp390.c \
+../Core/Src/flight_phases.c \
+../Core/Src/kalman_filter.c \
 ../Core/Src/lsm6dso.c \
 ../Core/Src/lsm6dso_reg.c \
 ../Core/Src/main.c \
@@ -19,6 +21,8 @@ C_SRCS += \
 OBJS += \
 ./Core/Src/adxl375.o \
 ./Core/Src/driver_bmp390.o \
+./Core/Src/flight_phases.o \
+./Core/Src/kalman_filter.o \
 ./Core/Src/lsm6dso.o \
 ./Core/Src/lsm6dso_reg.o \
 ./Core/Src/main.o \
@@ -31,6 +35,8 @@ OBJS += \
 C_DEPS += \
 ./Core/Src/adxl375.d \
 ./Core/Src/driver_bmp390.d \
+./Core/Src/flight_phases.d \
+./Core/Src/kalman_filter.d \
 ./Core/Src/lsm6dso.d \
 ./Core/Src/lsm6dso_reg.d \
 ./Core/Src/main.d \
@@ -43,12 +49,12 @@ C_DEPS += \
 
 # Each subdirectory must supply rules for building sources it contributes
 Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
-	arm-none-eabi-gcc "$<" -mcpu=cortex-m7 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F756xx -c -I../Core/Inc -I../Drivers/STM32F7xx_HAL_Driver/Inc -I../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F7xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"$(@:%.o=%.d)" -MT"$@" --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -o "$@"
+	arm-none-eabi-gcc "$<" -mcpu=cortex-m7 -std=gnu11 -g3 -DDEBUG -DARM_MATH_CM7 -DUSE_HAL_DRIVER -DSTM32F756xx -c -I"C:/Users/rutur/Documents/GitHub/STM32H756ZG_Nucleo_sandbox_FCDEV/Drivers/CMSIS/DSP/Include" -I../Core/Inc -I../Drivers/STM32F7xx_HAL_Driver/Inc -I../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F7xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"$(@:%.o=%.d)" -MT"$@" --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -o "$@"
 
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/adxl375.cyclo ./Core/Src/adxl375.d ./Core/Src/adxl375.o ./Core/Src/adxl375.su ./Core/Src/driver_bmp390.cyclo ./Core/Src/driver_bmp390.d ./Core/Src/driver_bmp390.o ./Core/Src/driver_bmp390.su ./Core/Src/lsm6dso.cyclo ./Core/Src/lsm6dso.d ./Core/Src/lsm6dso.o ./Core/Src/lsm6dso.su ./Core/Src/lsm6dso_reg.cyclo ./Core/Src/lsm6dso_reg.d ./Core/Src/lsm6dso_reg.o ./Core/Src/lsm6dso_reg.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f7xx_hal_msp.cyclo ./Core/Src/stm32f7xx_hal_msp.d ./Core/Src/stm32f7xx_hal_msp.o ./Core/Src/stm32f7xx_hal_msp.su ./Core/Src/stm32f7xx_it.cyclo ./Core/Src/stm32f7xx_it.d ./Core/Src/stm32f7xx_it.o ./Core/Src/stm32f7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32f7xx.cyclo ./Core/Src/system_stm32f7xx.d ./Core/Src/system_stm32f7xx.o ./Core/Src/system_stm32f7xx.su
+	-$(RM) ./Core/Src/adxl375.cyclo ./Core/Src/adxl375.d ./Core/Src/adxl375.o ./Core/Src/adxl375.su ./Core/Src/driver_bmp390.cyclo ./Core/Src/driver_bmp390.d ./Core/Src/driver_bmp390.o ./Core/Src/driver_bmp390.su ./Core/Src/flight_phases.cyclo ./Core/Src/flight_phases.d ./Core/Src/flight_phases.o ./Core/Src/flight_phases.su ./Core/Src/kalman_filter.cyclo ./Core/Src/kalman_filter.d ./Core/Src/kalman_filter.o ./Core/Src/kalman_filter.su ./Core/Src/lsm6dso.cyclo ./Core/Src/lsm6dso.d ./Core/Src/lsm6dso.o ./Core/Src/lsm6dso.su ./Core/Src/lsm6dso_reg.cyclo ./Core/Src/lsm6dso_reg.d ./Core/Src/lsm6dso_reg.o ./Core/Src/lsm6dso_reg.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f7xx_hal_msp.cyclo ./Core/Src/stm32f7xx_hal_msp.d ./Core/Src/stm32f7xx_hal_msp.o ./Core/Src/stm32f7xx_hal_msp.su ./Core/Src/stm32f7xx_it.cyclo ./Core/Src/stm32f7xx_it.d ./Core/Src/stm32f7xx_it.o ./Core/Src/stm32f7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32f7xx.cyclo ./Core/Src/system_stm32f7xx.d ./Core/Src/system_stm32f7xx.o ./Core/Src/system_stm32f7xx.su
 
 .PHONY: clean-Core-2f-Src
 
