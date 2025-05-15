@@ -4,7 +4,7 @@
 
 #include <stdint.h> // For standard integer types
 #include <math.h> // For mathematical functions
-
+#include <stdbool.h> // For boolean types
 
 typedef float float32_t;
 typedef struct {
@@ -45,13 +45,16 @@ typedef enum {
 // Define the flight state machine structure
 typedef struct {
     flight_fsm_e flight_state;
-    float32_t memory[3]; // Adjust size as needed
-    uint8_t state_changed; // Add this line to track state changes
+    float32_t memory[5]; // Adjust size as needed
+    uint8_t state_changed; // to track state changes
     uint32_t thrust_trigger_time;
-    uint32_t iteration_count; // Add this line to count iterations
+    uint32_t iteration_count; //to count iterations
+    bool apogee_flag; // flag for apogee event
+    bool main_deployment_flag; // flag for main deployment event
 } flight_fsm_t;
 
 // Function prototypes
+void trigger_event(cats_event_e event, flight_fsm_t *fsm_state);
 void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_data, estimation_output_t state_data, const control_settings_t *settings);
 static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const control_settings_t *settings);
 static void check_thrusting_phase(flight_fsm_t *fsm_state, estimation_output_t state_data);
