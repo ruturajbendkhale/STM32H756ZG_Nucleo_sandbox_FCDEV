@@ -33,7 +33,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F7xx_HAL_Driver/Inc/stm32f7xx_hal_pcd_ex.h \
  ../Core/Inc/lsm6dso.h ../Core/Inc/lsm6dso_reg.h \
  ../Core/Inc/driver_bmp390.h ../Core/Inc/lsm6dso_reg.h \
- ../Core/Inc/adxl375.h ../Core/Inc/main.h
+ ../Core/Inc/adxl375.h ../Core/Inc/main.h ../Core/Inc/Madgwick_filter.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F7xx_HAL_Driver/Inc/stm32f7xx_hal.h:
 ../Core/Inc/stm32f7xx_hal_conf.h:
@@ -73,3 +73,4 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/lsm6dso_reg.h:
 ../Core/Inc/adxl375.h:
 ../Core/Inc/main.h:
+../Core/Inc/Madgwick_filter.h:
