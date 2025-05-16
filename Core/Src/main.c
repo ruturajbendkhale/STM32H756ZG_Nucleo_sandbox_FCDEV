@@ -29,6 +29,7 @@
 #include <stdbool.h>
 #include "Madgwick_filter.h" // Include Madgwick filter
 #include "kalman_filter.h" // Include Kalman filter
+#include "flight_phases.h" // Include for flight state machine
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -98,6 +99,10 @@ float sea_level_pressure_hpa; // Store as hPa for altitude calculations
 // LSM6DSO Offsets (mg for accelerometer, mdps for gyroscope)
 static float lsm6dso_accel_offset_mg[3] = {0.0f, 0.0f, 0.0f};
 static float lsm6dso_gyro_offset_mdps[3] = {0.0f, 0.0f, 0.0f};
+
+// Flight State Machine and Settings
+static flight_fsm_t flight_state_machine;
+static control_settings_t control_settings;
 
 #define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
 #define LSM6DSO_I2C_ADD_H 0x6B  // Alternative I2C address for LSM6DSO (0x6B when SDO/SA0 is connected to VDD)
@@ -668,7 +673,21 @@ int main(void)
   sprintf(uart_buffer, "Kalman Filter Initialized. Initial Alt: %.2fm\r\n", initial_altitude_m);
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
-   // Define the flight state machine instance
+  // Initialize Flight State Machine
+  flight_state_machine.flight_state = READY;
+  flight_state_machine.state_changed = 0; // false
+  flight_state_machine.apogee_flag = false;
+  flight_state_machine.main_deployment_flag = false;
+  flight_state_machine.thrust_trigger_time = 0; // Initialize new members
+  flight_state_machine.iteration_count = 0;   // Initialize new members
+  for (int i = 0; i < 5; i++) {
+      flight_state_machine.memory[i] = 0.0f;
+  }
+
+  // Initialize Control Settings
+  control_settings.liftoff_acc_threshold = 4.0f; // 4G threshold
+
+   // Define the flight state machine instance // This comment seems to be a leftover, FSM is already defined
   /* USER CODE END 2 */
 
   // Wait for arming signal (PF12 to go HIGH when disconnected from GND)
@@ -785,6 +804,25 @@ int main(void)
     adxl_hi_g_y = (float)adxl_raw_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
     adxl_hi_g_z = (float)adxl_raw_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f);
     
+    // Prepare data for Flight State Machine
+    vf32_t adxl_acc_data_g;
+    adxl_acc_data_g.x = adxl_hi_g_x;
+    adxl_acc_data_g.y = adxl_hi_g_y;
+    adxl_acc_data_g.z = adxl_hi_g_z;
+
+    vf32_t lsm_gyro_data_for_fsm;
+    lsm_gyro_data_for_fsm.x = gyro_rps[0];
+    lsm_gyro_data_for_fsm.y = gyro_rps[1];
+    lsm_gyro_data_for_fsm.z = gyro_rps[2];
+
+    estimation_output_t current_state_estimation;
+    current_state_estimation.height = kf_altitude_velocity.altitude_m;
+    current_state_estimation.velocity = kf_altitude_velocity.vertical_velocity_mps;
+    current_state_estimation.acceleration = linear_accel_z_mps2; // World frame Z acceleration
+
+    // Check and update flight phase
+    check_flight_phase(&flight_state_machine, adxl_acc_data_g, lsm_gyro_data_for_fsm, current_state_estimation, &control_settings);
+
     uint32_t loop_end_tick = HAL_GetTick();
     uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
 
@@ -855,6 +893,22 @@ int main(void)
     current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "KF:Alt%.2f,Vel%.2f", kf_altitude_velocity.altitude_m, kf_altitude_velocity.vertical_velocity_mps);
     data_printed_prev = true;
 #endif
+
+    // Flight Phase Print
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 2) { // Need space for |FP:X
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|");
+    }
+    char phase_char = 'U'; // Unknown/default
+    switch (flight_state_machine.flight_state) {
+        case READY:     phase_char = 'R'; break;
+        case THRUSTING: phase_char = 'T'; break;
+        case COASTING:  phase_char = 'C'; break;
+        case DROGUE:    phase_char = 'D'; break;
+        case MAIN:      phase_char = 'M'; break;
+        case TOUCHDOWN: phase_char = 'L'; break; // L for Landed/Touchdown
+    }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "FP:%c", phase_char);
+    // No need to set data_printed_prev = true; as this is the last item before newline typically
 
     // Add newline if any data was printed
     if (current_len > 0) {

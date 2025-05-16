@@ -33,21 +33,21 @@ void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_da
 void trigger_event(cats_event_e event, flight_fsm_t *fsm_state) {
     switch (event) {
         case EV_LIFTOFF:
-            // Code to handle liftoff event
+            // Code to handle liftoff event //no action needed
             break;
         case EV_MAX_V:
-            // Code to handle maximum velocity event
+            // Code to handle maximum velocity event //no action needed
             break;
         case EV_APOGEE:
-            // Code to handle apogee event
+            // Code to handle apogee event // TRIGGER the Nosecone Seperation Motor for 1 Seconds
             fsm_state->apogee_flag = true; // Set apogee flag
             break;
         case EV_MAIN_DEPLOYMENT:
-            // Code to handle main deployment event
+            // Code to handle main deployment event // TRIGGER the Main Parachute Deployment Motor for 1 Seconds
             fsm_state->main_deployment_flag = true; // Set main deployment flag
             break;
         case EV_TOUCHDOWN:
-            // Code to handle touchdown event
+            // Code to handle touchdown event // Stop the Data Logging
             break;
         default:
             break;
@@ -63,7 +63,7 @@ static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const co
     const float32_t acceleration = accel_x + accel_y + accel_z;
 
     // num iterations, if the acceleration is bigger than the threshold for 0.1 s we detect liftoff
-    uint16_t LIFTOFF_SAFETY_COUNTER = 10;
+    uint16_t LIFTOFF_SAFETY_COUNTER = 10; // 10ms counter
 
     if (acceleration > (settings->liftoff_acc_threshold * settings->liftoff_acc_threshold)) {
         fsm_state->memory[0]++;
@@ -79,7 +79,7 @@ static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const co
 static void check_thrusting_phase(flight_fsm_t *fsm_state, estimation_output_t state_data) {
     /* When acceleration is below 0, liftoff concludes */
     // num iterations, acceleration needs to be smaller than 0 for at least 0.1 s for the transition THRUSTING -> COASTING
-    uint16_t COASTING_SAFETY_COUNTER = 10;
+    uint16_t COASTING_SAFETY_COUNTER = 10; // 10ms counter
     if (state_data.acceleration < 0) {
         fsm_state->memory[1]++;
     } else {
@@ -94,7 +94,7 @@ static void check_thrusting_phase(flight_fsm_t *fsm_state, estimation_output_t s
 static void check_coasting_phase(flight_fsm_t *fsm_state, estimation_output_t state_data) {
     /* When velocity is below 0, coasting concludes */
     // num iterations, velocity needs to be smaller than 0 for at least 0.3 s for the transition COASTING -> DROGUE
-    uint16_t APOGEE_SAFETY_COUNTER = 30;
+    uint16_t APOGEE_SAFETY_COUNTER = 30; // 30ms counter    
     //uint32_t thrust_trigger_time = 0;
     /* DROGUE */
     // num iterations, height needs to be smaller than user-defined for at least 0.3 s for the transition DROGUE -> MAIN
@@ -114,13 +114,12 @@ static void check_coasting_phase(flight_fsm_t *fsm_state, estimation_output_t st
 
 static void check_drogue_phase(flight_fsm_t *fsm_state, estimation_output_t state_data) {
     /* If the height is smaller than the configured Main height, main deployment needs to be actuated */
-    float32_t Main_height = 0;
-    uint16_t MAIN_SAFETY_COUNTER = 30;
+    float32_t Main_height = 500; // 500m
+    uint16_t MAIN_SAFETY_COUNTER = 30; // 30ms counter
     if (state_data.height < Main_height) {
         /* Achieved Height to deploy Main */
         fsm_state->memory[3]++;
     } else {
-        /* Did Not Achieve */
         fsm_state->memory[3] = 0;
     }
 
