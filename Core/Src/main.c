@@ -680,6 +680,7 @@ int main(void)
   flight_state_machine.main_deployment_flag = false;
   flight_state_machine.thrust_trigger_time = 0; // Initialize new members
   flight_state_machine.iteration_count = 0;   // Initialize new members
+  flight_state_machine.apogee_trigger_time_ms = 0; // Initialize apogee time
   for (int i = 0; i < 5; i++) {
       flight_state_machine.memory[i] = 0.0f;
   }
@@ -820,8 +821,11 @@ int main(void)
     current_state_estimation.velocity = kf_altitude_velocity.vertical_velocity_mps;
     current_state_estimation.acceleration = linear_accel_z_mps2; // World frame Z acceleration
 
+    // Read Launch Detect Pin (PA6)
+    bool launch_pin_is_high = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6) == GPIO_PIN_SET);
+
     // Check and update flight phase
-    check_flight_phase(&flight_state_machine, adxl_acc_data_g, lsm_gyro_data_for_fsm, current_state_estimation, &control_settings);
+    check_flight_phase(&flight_state_machine, adxl_acc_data_g, lsm_gyro_data_for_fsm, current_state_estimation, &control_settings, launch_pin_is_high);
 
     uint32_t loop_end_tick = HAL_GetTick();
     uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
@@ -1210,6 +1214,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA6 for Launch Detect */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

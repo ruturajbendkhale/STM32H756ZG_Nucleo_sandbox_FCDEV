@@ -1,4 +1,3 @@
-
 #ifndef FLIGHT_PHASES_H
 #define FLIGHT_PHASES_H
 
@@ -49,14 +48,15 @@ typedef struct {
     uint8_t state_changed; // to track state changes
     uint32_t thrust_trigger_time;
     uint32_t iteration_count; //to count iterations
+    uint32_t apogee_trigger_time_ms; // Time when apogee event was triggered
     bool apogee_flag; // flag for apogee event
     bool main_deployment_flag; // flag for main deployment event
 } flight_fsm_t;
 
 // Function prototypes
 void trigger_event(cats_event_e event, flight_fsm_t *fsm_state);
-void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_data, estimation_output_t state_data, const control_settings_t *settings);
-static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const control_settings_t *settings);
+void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_data, estimation_output_t state_data, const control_settings_t *settings, bool launch_pin_high);
+static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const control_settings_t *settings, bool launch_pin_high);
 static void check_thrusting_phase(flight_fsm_t *fsm_state, estimation_output_t state_data);
 static void check_coasting_phase(flight_fsm_t *fsm_state, estimation_output_t state_data);
 static void check_drogue_phase(flight_fsm_t *fsm_state, estimation_output_t state_data);

@@ -1,15 +1,16 @@
 #include "flight_phases.h"
 #include <math.h>
+#include "main.h" // For HAL_GetTick()
 
 
-void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_data, estimation_output_t state_data, const control_settings_t *settings) {
+void check_flight_phase(flight_fsm_t *fsm_state, vf32_t acc_data, vf32_t gyro_data, estimation_output_t state_data, const control_settings_t *settings, bool launch_pin_high) {
     // Save old FSM State
     flight_fsm_e old_fsm_state = fsm_state->flight_state;
 
     // Check FSM State
     switch (fsm_state->flight_state) {
         case READY:
-            check_ready_phase(fsm_state, acc_data, settings);
+            check_ready_phase(fsm_state, acc_data, settings, launch_pin_high);
             break;
         case THRUSTING:
             check_thrusting_phase(fsm_state, state_data);
@@ -41,6 +42,7 @@ void trigger_event(cats_event_e event, flight_fsm_t *fsm_state) {
         case EV_APOGEE:
             // Code to handle apogee event // TRIGGER the Nosecone Seperation Motor for 1 Seconds
             fsm_state->apogee_flag = true; // Set apogee flag
+            fsm_state->apogee_trigger_time_ms = HAL_GetTick(); // Record apogee time
             break;
         case EV_MAIN_DEPLOYMENT:
             // Code to handle main deployment event // TRIGGER the Main Parachute Deployment Motor for 1 Seconds
@@ -54,18 +56,27 @@ void trigger_event(cats_event_e event, flight_fsm_t *fsm_state) {
     }
 }
 
-static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const control_settings_t *settings) {
+static void check_ready_phase(flight_fsm_t *fsm_state, vf32_t acc_data, const control_settings_t *settings, bool launch_pin_high) {
     /* Check if we move from READY To THRUSTING */
+    
+    // Condition 1: Launch Pin is HIGH (disconnected from ground)
+    if (launch_pin_high) {
+        change_state_to(THRUSTING, EV_LIFTOFF, fsm_state);
+        return; // Exit immediately if launch pin triggers liftoff
+    }
+
+    // Condition 2: Acceleration threshold met for a duration
     /* The absolute value of the acceleration is used here to make sure that we detect liftoff */
     const float32_t accel_x = acc_data.x * acc_data.x;
     const float32_t accel_y = acc_data.y * acc_data.y;
     const float32_t accel_z = acc_data.z * acc_data.z;
-    const float32_t acceleration = accel_x + accel_y + accel_z;
+    // Calculate magnitude squared for comparison with squared threshold
+    const float32_t acceleration_sq = accel_x + accel_y + accel_z;
 
     // num iterations, if the acceleration is bigger than the threshold for 0.1 s we detect liftoff
-    uint16_t LIFTOFF_SAFETY_COUNTER = 10; // 10ms counter
+    uint16_t LIFTOFF_SAFETY_COUNTER = 10; // 10 loops * 10ms/loop = 100ms = 0.1s
 
-    if (acceleration > (settings->liftoff_acc_threshold * settings->liftoff_acc_threshold)) {
+    if (acceleration_sq > (settings->liftoff_acc_threshold * settings->liftoff_acc_threshold)) {
         fsm_state->memory[0]++;
     } else {
         fsm_state->memory[0] = 0;
@@ -113,17 +124,30 @@ static void check_coasting_phase(flight_fsm_t *fsm_state, estimation_output_t st
 }
 
 static void check_drogue_phase(flight_fsm_t *fsm_state, estimation_output_t state_data) {
-    /* If the height is smaller than the configured Main height, main deployment needs to be actuated */
     float32_t Main_height = 500; // 500m
     uint16_t MAIN_SAFETY_COUNTER = 30; // 30ms counter
+    bool time_condition = false;
+    bool altitude_condition = false;
+
+    // Check time-based condition
+    if (fsm_state->apogee_flag) {
+        if ((HAL_GetTick() - fsm_state->apogee_trigger_time_ms) >= 5000) { // 5 seconds
+            time_condition = true;
+        }
+    }
+
+    // Check altitude-based condition
     if (state_data.height < Main_height) {
-        /* Achieved Height to deploy Main */
         fsm_state->memory[3]++;
+        if (fsm_state->memory[3] > MAIN_SAFETY_COUNTER) {
+            altitude_condition = true;
+        }
     } else {
         fsm_state->memory[3] = 0;
     }
 
-    if (fsm_state->memory[3] > MAIN_SAFETY_COUNTER) {
+    // Transition if either condition is met
+    if (time_condition || altitude_condition) {
         change_state_to(MAIN, EV_MAIN_DEPLOYMENT, fsm_state);
     }
 }
