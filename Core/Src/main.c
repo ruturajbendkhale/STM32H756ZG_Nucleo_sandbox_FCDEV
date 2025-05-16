@@ -28,7 +28,7 @@
 #include "adxl375.h"     // Add ADXL375 support
 #include <stdbool.h>
 #include "Madgwick_filter.h" // Include Madgwick filter
-// #include "kalman_filter.h" // Kalman filter header (comment out if not immediately used or rename if it was Madgwick)
+#include "kalman_filter.h" // Include Kalman filter
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -45,13 +45,14 @@
 #define BMP390_I2C_ADDRESS_HIGH (0x77 << 1) // I2C address for BMP390 when SDO is high
 #define TARGET_LOOP_PERIOD_MS 10 // For 100Hz sampling frequency (1000ms / 100Hz = 10ms)
 
-// Define this to print all sensor data, comment it out to print only loop execution time
-//#define PRINT_FULL_SENSOR_DATA 
-#define PRINT_ORIENTATION_DATA 1 // Set to 1 to print orientation data, 0 to disable
-#define PRINT_ACCEL_DATA 1        // Set to 1 to print accelerometer data, 0 to disable
-#define PRINT_HGACC_DATA 1        // Set to 1 to print high-g accelerometer data, 0 to disable
-#define PRINT_BARO_DATA 1         // Set to 1 to print barometric data, 0 to disable
-#define PRINT_LOOP_TIME 1         // Set to 1 to print loop execution time, 0 to disable
+// Define these to print specific sensor data. Comment out to disable.
+#define PRINT_LSM6DSO_ACCEL_DATA
+#define PRINT_LSM6DSO_GYRO_DATA
+#define PRINT_BMP390_DATA
+#define PRINT_ADXL375_DATA
+#define PRINT_QUATERNION_DATA
+#define PRINT_LOOP_EXEC_TIME
+#define PRINT_KALMAN_DATA // New define for Kalman filter output
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -114,6 +115,9 @@ static uint8_t bmp390_read_scheduler = 0;
 // Persistent storage for last good BMP390 pressure and altitude
 static float persistent_bmp_pres_pa = 0.0f;
 static float persistent_bmp_alt_m = 0.0f;
+
+// Kalman Filter instance
+static KalmanFilter kf_altitude_velocity;
 
 // LSM6DSO functions re-enabled and corrected
 static int32_t platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len)
@@ -642,6 +646,28 @@ int main(void)
   // Turn on LED to indicate ready state
   HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET); // LD2 is usually green or yellow.
   
+  // Initialize Kalman Filter
+  // Noise parameters:
+  // BMP390 altitude noise RMS = 0.15m => variance = 0.15*0.15 = 0.0225 m^2
+  // LSM6DSO accel noise density = 160e-6 g/sqrt(Hz). For 100Hz sample rate (50Hz bandwidth):
+  // accel_process_noise_variance = (160e-6 * 9.80665)^2 * 50 approx 0.000123 (m/s^2)^2
+  float initial_altitude_m = 0.0f; // Will be updated by first good baro reading if possible, or use current persistent
+  if (sea_level_pressure_hpa > 0.0f && persistent_bmp_pres_pa > 0.0f) { // Check if calibration ran and we have a pressure
+      initial_altitude_m = calculate_altitude_hpa(persistent_bmp_pres_pa / 100.0f);
+  } else if (valid_calibration_readings > 0) { // Fallback to avg calibration altitude if available
+      initial_altitude_m = calculate_altitude_hpa((initial_pressure_pa_sum / valid_calibration_readings) / 100.0f);
+  }
+
+  kalman_init(&kf_altitude_velocity,
+              initial_altitude_m,       // initial_altitude_m
+              0.0225f,                  // initial_altitude_variance (R_baro)
+              1.0f,                     // initial_velocity_variance (e.g., 1 (m/s)^2)
+              0.000123f,                // process_noise_accel_variance (sigma_a^2 for Q)
+              0.0225f);                 // measurement_noise_baro_variance (R_baro)
+
+  sprintf(uart_buffer, "Kalman Filter Initialized. Initial Alt: %.2fm\r\n", initial_altitude_m);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
    // Define the flight state machine instance
   /* USER CODE END 2 */
 
@@ -705,7 +731,15 @@ int main(void)
     // For now, assume data is usually ready. If not, filter might get stale inputs from previous loop.
     MadgwickAHRSupdateIMU(gyro_rps[0], gyro_rps[1], gyro_rps[2], acc_g[0], acc_g[1], acc_g[2]);
 
+    // Calculate world-frame vertical linear acceleration for Kalman filter
+    float acc_z_world_g = (2.0f*(q1*q3 - q0*q2)*acc_g[0] + 2.0f*(q2*q3 + q0*q1)*acc_g[1] + (q0*q0 - q1*q1 - q2*q2 + q3*q3)*acc_g[2]);
+    float linear_accel_z_mps2 = (acc_z_world_g - 1.0f) * 9.80665f; // Assuming Z is UP
+
+    // Kalman Predict Step (every loop = every 10ms)
+    kalman_predict(&kf_altitude_velocity, linear_accel_z_mps2, 0.01f);
+
     // Read BMP390 data only every other cycle (20ms interval if loop is 10ms)
+    bool new_baro_data_for_kalman = false;
     if (bmp390_read_scheduler == 0) {
         float func_temp_c, func_pres_pa; // Local variables for the values read from the function
         if (bmp390_read_temperature_pressure(&bmp390_handle, &local_raw_temperature, &func_temp_c, &raw_pressure, &func_pres_pa) == 0) {
@@ -713,6 +747,7 @@ int main(void)
             persistent_bmp_pres_pa = func_pres_pa; // Update persistent pressure
             float current_pressure_hpa = persistent_bmp_pres_pa / 100.0f;
             persistent_bmp_alt_m = calculate_altitude_hpa(current_pressure_hpa); // Update persistent altitude
+            new_baro_data_for_kalman = true; // New data is available for Kalman
 
             // Temperature reading is no longer updated or used here actively
         HAL_GPIO_TogglePin(GPIOB, LD1_Pin); // Toggle LD1 (usually green) to show activity
@@ -724,8 +759,13 @@ int main(void)
     }
     // On other cycles, bmp_data_ok remains false, and old bmp_pres_pa, bmp_alt_m are used if printed.
 
+    // Kalman Update Step (conditionally, when new barometer data is available)
+    if (new_baro_data_for_kalman) {
+        kalman_update_barometer(&kf_altitude_velocity, persistent_bmp_alt_m);
+    }
+    
     bmp390_read_scheduler++;
-    if (bmp390_read_scheduler >= 2) { // Reset every 2 cycles
+    if (bmp390_read_scheduler >= 1) { // Reset every 2 cycles
         bmp390_read_scheduler = 0;
     }
     
@@ -750,46 +790,75 @@ int main(void)
 
     // Consolidate UART output
     int_fast16_t current_len = 0;
+    bool data_printed_prev = false; // Flag to track if a separator is needed
 
-#ifdef PRINT_ACCEL_DATA
-// LSM6DSO Output
-current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "A:");
-if (lsm_accel_data_ready) {
-    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "%.1f,%.1f,%.1f", lsm_acc_x, lsm_acc_y, lsm_acc_z);
-} else {
-    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "NR,NR,NR");
-}
-#endif // PRINT_ACCEL_DATA
+#ifdef PRINT_LSM6DSO_ACCEL_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "A:");
+    if (lsm_accel_data_ready) {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "%.1f,%.1f,%.1f", lsm_acc_x, lsm_acc_y, lsm_acc_z);
+    } else {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "NR,NR,NR");
+    }
+    data_printed_prev = true;
+#endif
 
-#ifdef PRINT_HGACC_DATA
-// ADXL375 Output
-current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|H:%.1f,%.1f,%.1f", adxl_hi_g_x, adxl_hi_g_y, adxl_hi_g_z);
-#endif // PRINT_HGACC_DATA
+#ifdef PRINT_LSM6DSO_GYRO_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "G:");
+    if (lsm_gyro_data_ready) {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "%.1f,%.1f,%.1f", lsm_gyr_x, lsm_gyr_y, lsm_gyr_z);
+    } else {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "NR,NR,NR");
+    }
+    data_printed_prev = true;
+#endif
 
-#ifdef PRINT_BARO_DATA
-// BMP390 Output
-current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|B:P%.0f,Alt%.1f", persistent_bmp_pres_pa, persistent_bmp_alt_m);
-#endif // PRINT_BARO_DATA
+#ifdef PRINT_BMP390_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "B:");
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "P%.0f,Alt%.1f", persistent_bmp_pres_pa, persistent_bmp_alt_m);
+    data_printed_prev = true;
+#endif
 
-#ifdef PRINT_ORIENTATION_DATA
-// Quaternion Output
-current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|Q:%.2f,%.2f,%.2f,%.2f", q0, q1, q2, q3);
-#endif // PRINT_ORIENTATION_DATA
+#ifdef PRINT_ADXL375_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "H:%.1f,%.1f,%.1f", adxl_hi_g_x, adxl_hi_g_y, adxl_hi_g_z);
+    data_printed_prev = true;
+#endif
+    
+#ifdef PRINT_QUATERNION_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "Q:%.2f,%.2f,%.2f,%.2f", q0, q1, q2, q3);
+    data_printed_prev = true;
+#endif
 
-#ifdef PRINT_LOOP_TIME
-// Loop Time Output (always printed)
-current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "L:%lums%s\r\n",
-                        execution_time_ms,
-                        (execution_time_ms >= TARGET_LOOP_PERIOD_MS && execution_time_ms != 0) ? " OV!" : "");
-#endif // PRINT_LOOP_TIME
+#ifdef PRINT_LOOP_EXEC_TIME
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "L:%lums%s",
+                            execution_time_ms,
+                            (execution_time_ms >= TARGET_LOOP_PERIOD_MS && execution_time_ms != 0) ? " OV!" : "");
+    data_printed_prev = true; // Though this is last, set it for consistency
+#endif
 
-if (current_len > 0 && (size_t)current_len < sizeof(uart_buffer)) {
-    HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, current_len, HAL_MAX_DELAY);
-} else if ((size_t)current_len >= sizeof(uart_buffer)) {
-    // Handle potential truncation / error in string formatting if buffer was too small
-    char err_msg[] = "UART buffer overflow!\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t*)err_msg, strlen(err_msg), HAL_MAX_DELAY);
-}
+#ifdef PRINT_KALMAN_DATA
+    if (data_printed_prev && current_len > 0 && (sizeof(uart_buffer) - current_len) > 0) { current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "|"); }
+    current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "KF:Alt%.2f,Vel%.2f", kf_altitude_velocity.altitude_m, kf_altitude_velocity.vertical_velocity_mps);
+    data_printed_prev = true;
+#endif
+
+    // Add newline if any data was printed
+    if (current_len > 0) {
+        current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "\r\n");
+    }
+
+    if (current_len > 0 && (size_t)current_len < sizeof(uart_buffer)) { // Check if anything was written and buffer not overflowed by snprintf
+        HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, current_len, HAL_MAX_DELAY);
+    } else if ((size_t)current_len >= sizeof(uart_buffer)) {
+        // Handle potential truncation / error in string formatting if buffer was too small
+        char err_msg[] = "UART buffer overflow!\r\n";
+        HAL_UART_Transmit(&huart3, (uint8_t*)err_msg, strlen(err_msg), HAL_MAX_DELAY);
+    }
 
 
     if (execution_time_ms < TARGET_LOOP_PERIOD_MS) {
