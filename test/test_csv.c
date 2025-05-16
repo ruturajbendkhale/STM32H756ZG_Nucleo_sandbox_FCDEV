@@ -4,7 +4,7 @@
 #include "flight_phases.h" // Include your state machine header
 #include "flight_phases.c"
 
-#define MAX_DATA_POINTS 100
+#define MAX_DATA_POINTS 2800
 
 typedef struct {
     float acc_x;    // Acceleration in the x direction
@@ -51,6 +51,9 @@ void test_state_machine_with_acceleration_data() {
     estimation_output_t state_data = {0.0f, 0.0f, 0.0f}; // State data
     control_settings_t settings = {0}; // Control settings
 
+    // Set up your control settings
+    settings.liftoff_acc_threshold = 1.5f; // Example threshold
+
     // Iterate through the acceleration data
     for (int i = 0; i < data_count; i++) {
         vf32_t acc_data = {acceleration_data[i].acc_x, acceleration_data[i].acc_y, acceleration_data[i].acc_z};
@@ -67,13 +70,12 @@ void test_state_machine_with_acceleration_data() {
 // Main function to run tests
 int main(void) {
     printf("Running State Machine Tests...\n");
-    read_acceleration_data("2020-09-08_NovaPayloader5-flight20.csv");
+    read_acceleration_data("test/2020-09-08_NovaPayloader5-flight20.csv");
     test_state_machine_with_acceleration_data();
     printf("All Tests Completed.\n");
 
     // Main loop (if needed)
     while (1) {
-        // Your main application code...
     }
 
     return 0;
