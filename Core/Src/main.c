@@ -671,6 +671,15 @@ int main(void)
    // Define the flight state machine instance
   /* USER CODE END 2 */
 
+  // Wait for arming signal (PF12 to go HIGH when disconnected from GND)
+  // Loop indefinitely until PF12 is HIGH (disconnected from GND)
+  while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_12) == GPIO_PIN_RESET) {
+       HAL_Delay(1); // Optional: uncomment for a slight delay
+  }
+
+  sprintf(uart_buffer, "System ARMED (PF12 HIGH). Entering main loop.\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -711,9 +720,9 @@ int main(void)
       acc_g[2] = lsm_acc_z / 1000.0f;
     }
 
-      if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
+        if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
       lsm_gyro_data_ready = true;
-          lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
+            lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
       lsm_gyr_x = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
       lsm_gyr_y = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
       lsm_gyr_z = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
@@ -1106,6 +1115,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE(); /* Added for PF12 */
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
@@ -1140,6 +1150,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PF12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

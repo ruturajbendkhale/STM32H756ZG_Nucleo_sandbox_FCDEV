@@ -231,7 +231,6 @@ canvas_accel_widget.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky=
 ax_accel.set_title("Accelerometer Data (Scrolling)")
 ax_accel.set_xlabel("Sample Index")
 ax_accel.set_ylabel("Acceleration (g)")
-ax_accel.set_ylim([-10, 10]) # Initial Y limits, can be adjusted
 ax_accel.grid(True)
 lines_accel = {
     "A_x": ax_accel.plot([], [], label="Acc X (g)", color="r")[0],
@@ -335,9 +334,7 @@ def update_gui():
     lines_accel["H_z"].set_data(list(graph_time_idx), list(hg_acc_g_z_hist))
 
     ax_accel.relim()
-    ax_accel.autoscale_view(True, True, True) # Autoscale x-axis
-    # Keep y-axis fixed or make it smarter later if needed
-    # ax_accel.set_ylim([-25, 25]) # Re-apply if autoscale_view changes it undesirably for y
+    ax_accel.autoscale_view(True, True, True) # Autoscale x and y axes
     if graph_time_idx: # Ensure x-axis scrolls
         ax_accel.set_xlim(graph_time_idx[0], graph_time_idx[-1])
 
