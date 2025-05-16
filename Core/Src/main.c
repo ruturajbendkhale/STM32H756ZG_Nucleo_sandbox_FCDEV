@@ -678,9 +678,13 @@ int main(void)
   flight_state_machine.state_changed = 0; // false
   flight_state_machine.apogee_flag = false;
   flight_state_machine.main_deployment_flag = false;
-  flight_state_machine.thrust_trigger_time = 0; // Initialize new members
-  flight_state_machine.iteration_count = 0;   // Initialize new members
-  flight_state_machine.apogee_trigger_time_ms = 0; // Initialize apogee time
+  flight_state_machine.thrust_trigger_time = 0;
+  flight_state_machine.iteration_count = 0;  
+  flight_state_machine.apogee_trigger_time_ms = 0;
+  flight_state_machine.nosecone_motor_active = false; // Initialize nosecone motor state
+  flight_state_machine.nosecone_motor_start_time_ms = 0; // Initialize nosecone motor time
+  flight_state_machine.main_parachute_motor_active = false; // Initialize main parachute motor state
+  flight_state_machine.main_parachute_motor_start_time_ms = 0; // Initialize main parachute motor time
   for (int i = 0; i < 5; i++) {
       flight_state_machine.memory[i] = 0.0f;
   }
@@ -826,6 +830,9 @@ int main(void)
 
     // Check and update flight phase
     check_flight_phase(&flight_state_machine, adxl_acc_data_g, lsm_gyro_data_for_fsm, current_state_estimation, &control_settings, launch_pin_is_high);
+
+    // Manage timed actuators (e.g., motors)
+    manage_timed_actuators(&flight_state_machine);
 
     uint32_t loop_end_tick = HAL_GetTick();
     uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
@@ -1225,6 +1232,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB4 for Nosecone Motor */
+  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET); // Ensure motor is OFF initially
+
+  /*Configure GPIO pin : PB5 for Main Parachute Motor */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET); // Ensure motor is OFF initially
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 

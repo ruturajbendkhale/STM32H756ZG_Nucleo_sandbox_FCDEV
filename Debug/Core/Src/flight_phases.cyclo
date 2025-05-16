@@ -1,9 +1,10 @@
 ../Core/Src/flight_phases.c:6:6:check_flight_phase	6
 ../Core/Src/flight_phases.c:34:6:trigger_event	3
-../Core/Src/flight_phases.c:59:13:check_ready_phase	4
-../Core/Src/flight_phases.c:90:13:check_thrusting_phase	3
-../Core/Src/flight_phases.c:105:13:check_coasting_phase	3
-../Core/Src/flight_phases.c:126:13:check_drogue_phase	7
-../Core/Src/flight_phases.c:155:13:check_main_phase	3
-../Core/Src/flight_phases.c:172:13:clear_fsm_memory	1
-../Core/Src/flight_phases.c:180:13:change_state_to	1
+../Core/Src/flight_phases.c:69:13:check_ready_phase	4
+../Core/Src/flight_phases.c:100:13:check_thrusting_phase	3
+../Core/Src/flight_phases.c:115:13:check_coasting_phase	3
+../Core/Src/flight_phases.c:136:13:check_drogue_phase	7
+../Core/Src/flight_phases.c:165:13:check_main_phase	3
+../Core/Src/flight_phases.c:182:13:clear_fsm_memory	1
+../Core/Src/flight_phases.c:190:13:change_state_to	1
+../Core/Src/flight_phases.c:199:6:manage_timed_actuators	5

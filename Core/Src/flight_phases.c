@@ -43,10 +43,20 @@ void trigger_event(cats_event_e event, flight_fsm_t *fsm_state) {
             // Code to handle apogee event // TRIGGER the Nosecone Seperation Motor for 1 Seconds
             fsm_state->apogee_flag = true; // Set apogee flag
             fsm_state->apogee_trigger_time_ms = HAL_GetTick(); // Record apogee time
+            
+            // Activate Nosecone Motor
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET); // Turn PB4 ON
+            fsm_state->nosecone_motor_active = true;
+            fsm_state->nosecone_motor_start_time_ms = HAL_GetTick();
             break;
         case EV_MAIN_DEPLOYMENT:
-            // Code to handle main deployment event // TRIGGER the Main Parachute Deployment Motor for 1 Seconds
+            // Code to handle main deployment event // TRIGGER the Main Parachute Deployment Motor for 2 Seconds
             fsm_state->main_deployment_flag = true; // Set main deployment flag
+            
+            // Activate Main Parachute Motor
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET); // Turn PB5 ON
+            fsm_state->main_parachute_motor_active = true;
+            fsm_state->main_parachute_motor_start_time_ms = HAL_GetTick();
             break;
         case EV_TOUCHDOWN:
             // Code to handle touchdown event // Stop the Data Logging
@@ -183,4 +193,26 @@ static void change_state_to(flight_fsm_e new_state, cats_event_e event_to_trigge
     clear_fsm_memory(fsm_state);
     // Trigger the corresponding event
     trigger_event(event_to_trigger, fsm_state);
+}
+
+// New function to manage timed actuators like motors
+void manage_timed_actuators(flight_fsm_t *fsm_state) {
+    // --- Nosecone Motor Control (PB4) ---
+    if (fsm_state->nosecone_motor_active) {
+        if ((HAL_GetTick() - fsm_state->nosecone_motor_start_time_ms) >= 1000) { // 1000 ms = 1 second
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET); // Turn PB4 OFF
+            fsm_state->nosecone_motor_active = false;
+        }
+    }
+
+    // --- Main Parachute Motor Control (PB5) ---
+    if (fsm_state->main_parachute_motor_active) {
+        if ((HAL_GetTick() - fsm_state->main_parachute_motor_start_time_ms) >= 2000) { // 2000 ms = 2 seconds
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET); // Turn PB5 OFF
+            fsm_state->main_parachute_motor_active = false;
+        }
+    }
+
+    // Add other timed actuator logic here if needed in the future
+    // For example, main parachute motor
 }
