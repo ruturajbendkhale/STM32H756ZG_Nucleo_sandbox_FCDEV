@@ -691,13 +691,13 @@ int main(void)
    // Define the flight state machine instance // This comment seems to be a leftover, FSM is already defined
   /* USER CODE END 2 */
 
-  // Wait for arming signal (PF12 to go HIGH when disconnected from GND)
-  // Loop indefinitely until PF12 is HIGH (disconnected from GND)
-  while (HAL_GPIO_ReadPin(GPIOF, GPIO_PIN_12) == GPIO_PIN_RESET) {
-       HAL_Delay(1); // Optional: uncomment for a slight delay
+  // Wait for arming signal (PA5 to go HIGH when disconnected from GND)
+  // Loop indefinitely until PA5 is HIGH (disconnected from GND)
+  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_5) == GPIO_PIN_RESET) {
+      HAL_Delay(1); // Optional: uncomment for a slight delay
   }
 
-  sprintf(uart_buffer, "System ARMED (PF12 HIGH). Entering main loop.\r\n");
+  sprintf(uart_buffer, "System ARMED (PA5 HIGH). Entering main loop.\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
   /* Infinite loop */
@@ -1173,9 +1173,8 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE(); /* Added for PF12 */
+  // __HAL_RCC_GPIOF_CLK_ENABLE(); /* Clock for PF12, can be removed if PF12 is no longer used */
   __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, LD1_Pin|LD3_Pin|LD2_Pin, GPIO_PIN_RESET);
@@ -1209,11 +1208,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PF12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  /*Configure GPIO pin : PF12 - REMOVE/COMMENT OUT if no longer used */
+  // GPIO_InitStruct.Pin = GPIO_PIN_12;
+  // GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  // GPIO_InitStruct.Pull = GPIO_PULLUP;
+  // HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA5 for Arming Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA6 for Launch Detect */
   GPIO_InitStruct.Pin = GPIO_PIN_6;
