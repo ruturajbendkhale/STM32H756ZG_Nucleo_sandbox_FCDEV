@@ -95,6 +95,10 @@ bmp390_handle_t bmp390_handle;
 char uart_buffer[256]; // Increased buffer size
 float sea_level_pressure_hpa; // Store as hPa for altitude calculations
 
+// LSM6DSO Offsets (mg for accelerometer, mdps for gyroscope)
+static float lsm6dso_accel_offset_mg[3] = {0.0f, 0.0f, 0.0f};
+static float lsm6dso_gyro_offset_mdps[3] = {0.0f, 0.0f, 0.0f};
+
 #define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
 #define LSM6DSO_I2C_ADD_H 0x6B  // Alternative I2C address for LSM6DSO (0x6B when SDO/SA0 is connected to VDD)
 
@@ -458,6 +462,50 @@ int main(void)
   sprintf(uart_buffer, "LSM6DSO Initialized and Configured (XL:104Hz/16g, GY:104Hz/2000dps).\r\n");
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
+  // Calibrate LSM6DSO Accelerometer and Gyroscope
+  sprintf(uart_buffer, "Starting LSM6DSO calibration... Keep device still and flat for a few seconds.\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+
+  const int lsm6dso_cal_samples = 100;
+  float temp_accel_sum_mg[3] = {0.0f, 0.0f, 0.0f};
+  float temp_gyro_sum_mdps[3] = {0.0f, 0.0f, 0.0f};
+  int16_t raw_acc[3], raw_gyro[3];
+
+  for (int i = 0; i < lsm6dso_cal_samples; i++) {
+    uint8_t reg_lsm_cal;
+    do {
+        lsm6dso_status_reg_get(&dev_ctx, &reg_lsm_cal);
+    } while (!((reg_lsm_cal & 0x01) && (reg_lsm_cal & 0x02))); // Wait for both Accel (XLDA) and Gyro (GDA) data ready
+
+    lsm6dso_acceleration_raw_get(&dev_ctx, raw_acc);
+    temp_accel_sum_mg[0] += lsm6dso_from_fs16g_to_mg(raw_acc[0]);
+    temp_accel_sum_mg[1] += lsm6dso_from_fs16g_to_mg(raw_acc[1]);
+    temp_accel_sum_mg[2] += lsm6dso_from_fs16g_to_mg(raw_acc[2]);
+
+    lsm6dso_angular_rate_raw_get(&dev_ctx, raw_gyro);
+    temp_gyro_sum_mdps[0] += lsm6dso_from_fs2000dps_to_mdps(raw_gyro[0]);
+    temp_gyro_sum_mdps[1] += lsm6dso_from_fs2000dps_to_mdps(raw_gyro[1]);
+    temp_gyro_sum_mdps[2] += lsm6dso_from_fs2000dps_to_mdps(raw_gyro[2]);
+
+    HAL_Delay(10); // Delay between samples (LSM6DSO ODR is ~104Hz, so new data every ~9.6ms)
+  }
+
+  lsm6dso_accel_offset_mg[0] = temp_accel_sum_mg[0] / lsm6dso_cal_samples;
+  lsm6dso_accel_offset_mg[1] = temp_accel_sum_mg[1] / lsm6dso_cal_samples;
+  lsm6dso_accel_offset_mg[2] = (temp_accel_sum_mg[2] / lsm6dso_cal_samples) - 1000.0f; // Assuming Z-axis is UP, expecting +1g (1000mg)
+
+  lsm6dso_gyro_offset_mdps[0] = temp_gyro_sum_mdps[0] / lsm6dso_cal_samples;
+  lsm6dso_gyro_offset_mdps[1] = temp_gyro_sum_mdps[1] / lsm6dso_cal_samples;
+  lsm6dso_gyro_offset_mdps[2] = temp_gyro_sum_mdps[2] / lsm6dso_cal_samples;
+
+  sprintf(uart_buffer, "LSM6DSO Calibration Complete.\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  sprintf(uart_buffer, "  Accel Offsets (mg): X: %.2f, Y: %.2f, Z: %.2f\r\n", 
+          lsm6dso_accel_offset_mg[0], lsm6dso_accel_offset_mg[1], lsm6dso_accel_offset_mg[2]);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  sprintf(uart_buffer, "  Gyro Offsets (mdps): X: %.2f, Y: %.2f, Z: %.2f\r\n", 
+          lsm6dso_gyro_offset_mdps[0], lsm6dso_gyro_offset_mdps[1], lsm6dso_gyro_offset_mdps[2]);
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
   // Initialize BMP390 using the new driver
   DRIVER_BMP390_LINK_INIT(&bmp390_handle, bmp390_handle_t);
@@ -578,64 +626,16 @@ int main(void)
       sprintf(uart_buffer, "Calibrating ADXL375... Please keep device still with Z-axis up.\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
-      // Take 50 samples and average them
-      int32_t sum_x = 0, sum_y = 0, sum_z = 0;
-      int16_t raw_x, raw_y, raw_z;
-      const int cal_samples = 50;
+      adxl375_calibrate(); // Call the new calibration function
       
-      for (int i = 0; i < cal_samples; i++) {
-          adxl375_read_xyz(&raw_x, &raw_y, &raw_z);
-          sum_x += raw_x;
-          sum_y += raw_y;
-          sum_z += raw_z;
-          
-          // Flash LED to show calibration in progress
-          if (i % 10 == 0) {
-              HAL_GPIO_TogglePin(GPIOB, LD1_Pin);
-          }
-          HAL_Delay(10);
-      }
-      
-      // Calculate average readings
-      float avg_x = (float)sum_x / cal_samples;
-      float avg_y = (float)sum_y / cal_samples;
-      float avg_z = (float)sum_z / cal_samples;
-      
-      // Calculate offsets needed to make Z read 1G and X/Y read 0G
-      // First, determine the expected 1G raw reading based on sensitivity
-      float expected_1g_raw = 1000.0f / ADXL375_SENSITIVITY_MG_PER_LSB; // 1g = 1000mg
-      
-      // Calculate the offset values (signed 8-bit, so max ±127)
-      // Offset registers act in the opposite direction of the measurement
-      int8_t offset_x = -(int8_t)(avg_x / 4.0f); // ADXL375 datasheet specifies 15.6mg per LSB for offset registers
-      int8_t offset_y = -(int8_t)(avg_y / 4.0f);
-      int8_t offset_z = -(int8_t)((avg_z - expected_1g_raw) / 4.0f);
-      
-      // Clamp to int8_t range
-      offset_x = (offset_x > 127) ? 127 : ((offset_x < -128) ? -128 : offset_x);
-      offset_y = (offset_y > 127) ? 127 : ((offset_y < -128) ? -128 : offset_y);
-      offset_z = (offset_z > 127) ? 127 : ((offset_z < -128) ? -128 : offset_z);
-      
-      // Write the offsets to the ADXL375
-      adxl375_write_offsets(offset_x, offset_y, offset_z);
-      
-      // Read back and verify the offsets
+      // Read back and verify the offsets (original code)
       int8_t read_offset_x, read_offset_y, read_offset_z;
       adxl375_read_offsets(&read_offset_x, &read_offset_y, &read_offset_z);
       
       sprintf(uart_buffer, "ADXL375 Calibration Complete.\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
-      sprintf(uart_buffer, "  Avg Readings: X=%.2f, Y=%.2f, Z=%.2f\r\n", 
-              avg_x * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f),
-              avg_y * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f),
-              avg_z * (ADXL375_SENSITIVITY_MG_PER_LSB / 1000.0f));
-      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-      
-      sprintf(uart_buffer, "  Applied Offsets: X=%d, Y=%d, Z=%d\r\n", offset_x, offset_y, offset_z);
-      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-      
-      sprintf(uart_buffer, "  Readback Offsets: X=%d, Y=%d, Z=%d\r\n", read_offset_x, read_offset_y, read_offset_z);
+      sprintf(uart_buffer, "  Readback Offsets from ADXL375: X=%d, Y=%d, Z=%d\r\n", read_offset_x, read_offset_y, read_offset_z);
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
   } else {
@@ -710,9 +710,9 @@ int main(void)
     if (reg_lsm & 0x01) { // Check XLDA bit
       lsm_accel_data_ready = true;
       lsm6dso_acceleration_raw_get(&dev_ctx, data_raw_acceleration);
-      lsm_acc_x = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[0]);
-      lsm_acc_y = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[1]);
-      lsm_acc_z = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[2]);
+      lsm_acc_x = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[0]) - lsm6dso_accel_offset_mg[0];
+      lsm_acc_y = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[1]) - lsm6dso_accel_offset_mg[1];
+      lsm_acc_z = lsm6dso_from_fs16g_to_mg(data_raw_acceleration[2]) - lsm6dso_accel_offset_mg[2];
 
       // Convert accelerometer data from mg to g for Madgwick
       acc_g[0] = lsm_acc_x / 1000.0f;
@@ -723,9 +723,9 @@ int main(void)
         if (reg_lsm & 0x02) { // Check GDA (Gyroscope Data Available) bit
       lsm_gyro_data_ready = true;
             lsm6dso_angular_rate_raw_get(&dev_ctx, data_raw_angular_rate);
-      lsm_gyr_x = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]);
-      lsm_gyr_y = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]);
-      lsm_gyr_z = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]);
+      lsm_gyr_x = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) - lsm6dso_gyro_offset_mdps[0];
+      lsm_gyr_y = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) - lsm6dso_gyro_offset_mdps[1];
+      lsm_gyr_z = lsm6dso_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) - lsm6dso_gyro_offset_mdps[2];
 
       // Convert gyroscope data from mdps to rad/s for Madgwick
       // PI is defined in Madgwick_filter.h

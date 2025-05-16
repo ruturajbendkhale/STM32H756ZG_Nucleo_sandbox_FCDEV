@@ -8,3 +8,4 @@
 ../Core/Src/adxl375.c:63:6:adxl375_read_xyz_mps2	4
 ../Core/Src/adxl375.c:85:6:adxl375_write_offsets	1
 ../Core/Src/adxl375.c:92:6:adxl375_read_offsets	4
+../Core/Src/adxl375.c:105:6:adxl375_calibrate	2

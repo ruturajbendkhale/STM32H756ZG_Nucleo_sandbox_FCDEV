@@ -26,6 +26,7 @@
 // The device outputs data with a typical scale factor of 49 mg/LSB.
 #define ADXL375_SENSITIVITY_MG_PER_LSB 49.0f // mg per LSB
 #define GRAVITY_MS2                    9.80665f // Standard gravity in m/s^2
+#define ADXL375_CALIBRATION_SAMPLES    50 // Number of samples for calibration
 
 // I2C handle (should be defined in main.c or elsewhere)
 extern I2C_HandleTypeDef hi2c1;
@@ -42,5 +43,6 @@ void     adxl375_read_xyz_mps2(float *x_mps2, float *y_mps2, float *z_mps2);
 // New functions for offset registers
 void     adxl375_write_offsets(int8_t ofx, int8_t ofy, int8_t ofz);
 void     adxl375_read_offsets(int8_t *ofx, int8_t *ofy, int8_t *ofz);
+void     adxl375_calibrate(void);
 
 #endif /* __ADXL375_H */

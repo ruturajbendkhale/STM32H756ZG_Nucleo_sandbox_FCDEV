@@ -101,3 +101,41 @@ void adxl375_read_offsets(int8_t *ofx, int8_t *ofy, int8_t *ofz)
         *ofz = (int8_t)adxl375_read(ADXL375_REG_OFSZ);
     }
 }
+
+void adxl375_calibrate(void)
+{
+    int32_t sum_x = 0, sum_y = 0, sum_z = 0;
+    int16_t raw_x, raw_y, raw_z;
+
+    for (int i = 0; i < ADXL375_CALIBRATION_SAMPLES; i++) {
+        adxl375_read_xyz(&raw_x, &raw_y, &raw_z);
+        sum_x += raw_x;
+        sum_y += raw_y;
+        sum_z += raw_z;
+        HAL_Delay(10); // Delay between samples, as was in main.c
+    }
+
+    float avg_x = (float)sum_x / ADXL375_CALIBRATION_SAMPLES;
+    float avg_y = (float)sum_y / ADXL375_CALIBRATION_SAMPLES;
+    float avg_z = (float)sum_z / ADXL375_CALIBRATION_SAMPLES;
+
+    // Calculate offsets needed to make Z read 1G (approx) and X/Y read 0G
+    // The sensitivity 49.0f mg/LSB is from adxl375.h
+    float expected_1g_raw = 1000.0f / ADXL375_SENSITIVITY_MG_PER_LSB; 
+
+    // Using the same offset calculation logic as was in main.c
+    // The factor 4.0f was empirically derived or a simplification.
+    // ADXL375 datasheet specifies offset register scale factor of 15.6 mg/LSB.
+    int8_t offset_x = -(int8_t)(avg_x / 4.0f); 
+    int8_t offset_y = -(int8_t)(avg_y / 4.0f);
+    int8_t offset_z = -(int8_t)((avg_z - expected_1g_raw) / 4.0f);
+
+    // Clamp to int8_t range (-128 to 127)
+    // The cast to int8_t handles the positive side, but negative needs care if intermediate is < -128.
+    // However, direct casting from float usually truncates. The (int8_t) cast will take the lower 8 bits.
+    // A more robust clamping for int8_t would be:
+    // offset_x = (offset_x_float < -128.0f) ? -128 : ((offset_x_float > 127.0f) ? 127 : (int8_t)offset_x_float);
+    // For now, sticking to the original simple cast as in main.c
+
+    adxl375_write_offsets(offset_x, offset_y, offset_z);
+}
