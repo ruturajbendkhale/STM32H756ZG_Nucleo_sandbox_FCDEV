@@ -1,6 +1,8 @@
 #ifndef PARAMETERS_H_
 #define PARAMETERS_H_
+// CONSTANTS 
 
+#define MILIDEGREE_TO_RADIANS PI / 180.0f / 1000.0f
 // Target Loop & General Timing
 #define TARGET_LOOP_PERIOD_MS 10         // Target main loop period in milliseconds (e.g., for 100Hz operation)
 #define BMP_TEMP_READ_INTERVAL_LOOPS 100 // Read BMP390 temperature every N main loops (e.g., 100 loops * 10ms/loop = 1s interval)
@@ -9,8 +11,8 @@
 // I2C Addresses
 #define BMP390_I2C_ADDRESS_LOW_SHIFTED  (0x76 << 1) // BMP390 I2C address when SDO is LOW (8-bit)
 #define BMP390_I2C_ADDRESS_HIGH_SHIFTED (0x77 << 1) // BMP390 I2C address when SDO is HIGH (8-bit)
-#define LSM6DSO_I2C_ADDRESS_LOW_7BIT    0x6A        // LSM6DSO I2C address when SA0/SDO is LOW (7-bit)
-#define LSM6DSO_I2C_ADDRESS_HIGH_7BIT   0x6B        // LSM6DSO I2C address when SA0/SDO is HIGH (7-bit)
+#define LSM6DSO_I2C_ADD_L    0x6A        // LSM6DSO I2C address when SA0/SDO is LOW (7-bit)
+#define LSM6DSO_I2C_ADD_H   0x6B        // LSM6DSO I2C address when SA0/SDO is HIGH (7-bit)
 #define ADXL375_I2C_ADDRESS_SHIFTED     (0x53 << 1) // ADXL375 I2C address (ALT ADDRESS pin low) (8-bit)
 
 // Sensor Calibration & Configuration

@@ -721,7 +721,7 @@ int main(void)
    // Define the flight state machine instance // This comment seems to be a leftover, FSM is already defined
   /* USER CODE END 2 */
 
-  /* Infinite loop */
+  /* Infinite main loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
@@ -770,15 +770,11 @@ int main(void)
 
       // Convert gyroscope data from mdps to rad/s for Madgwick
       // PI is defined in Madgwick_filter.h
-      gyro_rps[0] = lsm_gyr_x * (PI / 180.0f / 1000.0f);
-      gyro_rps[1] = lsm_gyr_y * (PI / 180.0f / 1000.0f);
-      gyro_rps[2] = lsm_gyr_z * (PI / 180.0f / 1000.0f);
+      gyro_rps[0] = lsm_gyr_x * MILIDEGREE_TO_RADIANS;
+      gyro_rps[1] = lsm_gyr_y * MILIDEGREE_TO_RADIANS;
+      gyro_rps[2] = lsm_gyr_z * MILIDEGREE_TO_RADIANS;
     }
 
-    // Update Madgwick filter (call this every 10ms)
-    // Ensure acc_g and gyro_rps are updated if data is ready, otherwise, decide on behavior
-    // (e.g., use last known, or skip update if critical data missing)
-    // For now, assume data is usually ready. If not, filter might get stale inputs from previous loop.
     MadgwickAHRSupdateIMU(gyro_rps[0], gyro_rps[1], gyro_rps[2], acc_g[0], acc_g[1], acc_g[2]);
 
     // Calculate world-frame vertical linear acceleration for Kalman filter
