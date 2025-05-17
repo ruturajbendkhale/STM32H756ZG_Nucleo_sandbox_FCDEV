@@ -30,6 +30,7 @@
 #include "Madgwick_filter.h" // Include Madgwick filter
 #include "kalman_filter.h" // Include Kalman filter
 #include "flight_phases.h" // Include for flight state machine
+#include "SD.h" // Include SD card support
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -93,6 +94,7 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 static stmdev_ctx_t dev_ctx; // Re-enable LSM6DSO context
 
 bmp390_handle_t bmp390_handle;
+SPI_HandleTypeDef hspi2; // Declare SPI2 handle
 char uart_buffer[256]; // Increased buffer size
 float sea_level_pressure_hpa; // Store as hPa for altitude calculations
 
@@ -103,6 +105,9 @@ static float lsm6dso_gyro_offset_mdps[3] = {0.0f, 0.0f, 0.0f};
 // Flight State Machine and Settings
 static flight_fsm_t flight_state_machine;
 static control_settings_t control_settings;
+static bool sd_logging_stopped = false; // Flag to ensure SD_Log_Stop is called once
+static uint32_t log_entry_count = 0;    // Counter for logged entries
+#define MAX_LOG_ENTRIES 100             // Maximum number of entries to log for this test
 
 #define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
 #define LSM6DSO_I2C_ADD_H 0x6B  // Alternative I2C address for LSM6DSO (0x6B when SDO/SA0 is connected to VDD)
@@ -179,6 +184,7 @@ static void MX_ETH_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 
 // Wrapper functions for BMP390 driver
@@ -367,6 +373,7 @@ int main(void)
   MX_I2C1_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
   
   // Initialize I2C (already called by HAL_Init system, but good to ensure)
@@ -692,6 +699,22 @@ int main(void)
   // Initialize Control Settings
   control_settings.liftoff_acc_threshold = 4.0f; // 4G threshold
 
+  // Initialize SD Card
+  MX_SPI2_Init(); // Initialize SPI2 peripheral for SD Card
+  SD_SPI_Init(&hspi2); // Pass the SPI2 handle to the SD card driver
+
+  sprintf(uart_buffer, "Initializing SD Card for logging...\r\n");
+  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+  if (SD_Init() == 0) {
+      sprintf(uart_buffer, "SD Card Initialized Successfully.\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      SD_Log_Start(0); // Start logging from block 0. Choose a suitable start block.
+  } else {
+      sprintf(uart_buffer, "SD Card Initialization FAILED!\r\n");
+      HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+      // Handle SD card initialization failure, perhaps by not proceeding or setting a flag
+  }
+
    // Define the flight state machine instance // This comment seems to be a leftover, FSM is already defined
   /* USER CODE END 2 */
 
@@ -836,6 +859,58 @@ int main(void)
 
     uint32_t loop_end_tick = HAL_GetTick();
     uint32_t execution_time_ms = loop_end_tick - loop_start_tick;
+
+    // Populate FlightData_LogEntry_t
+    FlightData_LogEntry_t current_log_entry;
+    current_log_entry.timestamp_ms = loop_start_tick; // Or loop_end_tick, or a more precise timer if available
+
+    current_log_entry.lsm_acc_x_mg = lsm_acc_x;
+    current_log_entry.lsm_acc_y_mg = lsm_acc_y;
+    current_log_entry.lsm_acc_z_mg = lsm_acc_z;
+
+    current_log_entry.lsm_gyro_x_mdps = lsm_gyr_x;
+    current_log_entry.lsm_gyro_y_mdps = lsm_gyr_y;
+    current_log_entry.lsm_gyro_z_mdps = lsm_gyr_z;
+
+    current_log_entry.bmp_pres_pa = persistent_bmp_pres_pa;
+    current_log_entry.bmp_alt_m = persistent_bmp_alt_m;
+
+    current_log_entry.adxl_hi_g_x = adxl_hi_g_x;
+    current_log_entry.adxl_hi_g_y = adxl_hi_g_y;
+    current_log_entry.adxl_hi_g_z = adxl_hi_g_z;
+
+    current_log_entry.q0 = q0;
+    current_log_entry.q1 = q1;
+    current_log_entry.q2 = q2;
+    current_log_entry.q3 = q3;
+
+    current_log_entry.kf_altitude_m = kf_altitude_velocity.altitude_m;
+    current_log_entry.kf_velocity_mps = kf_altitude_velocity.vertical_velocity_mps;
+
+    current_log_entry.loop_exec_time_ms = execution_time_ms;
+    current_log_entry.flight_phase = (uint8_t)flight_state_machine.flight_state;
+
+    // Log the data to SD card if count is less than MAX_LOG_ENTRIES
+    if (!sd_logging_stopped && log_entry_count < MAX_LOG_ENTRIES) {
+        SD_Log_Data(&current_log_entry);
+        log_entry_count++;
+
+        if (log_entry_count >= MAX_LOG_ENTRIES) {
+            sprintf(uart_buffer, "Reached %u log entries. Stopping SD card logging.\r\n", MAX_LOG_ENTRIES);
+            HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
+            SD_Log_Stop();
+            sd_logging_stopped = true;
+            HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET); // Turn off Green LED (LD2) to indicate logging stopped
+        }
+    } else if (!sd_logging_stopped && log_entry_count >= MAX_LOG_ENTRIES) {
+        // This case handles if logging was already meant to be stopped but flag wasn't set.
+        // Ensures SD_Log_Stop() is called if it somehow wasn't.
+        if (!sd_logging_stopped) { // Check flag again to be absolutely sure
+            SD_Log_Stop();
+            sd_logging_stopped = true;
+             HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET); // Turn off Green LED (LD2)
+        }
+    }
 
     // Check if execution time exceeds 10ms
     if (execution_time_ms >= TARGET_LOOP_PERIOD_MS) {
@@ -1164,6 +1239,46 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW; // Or SPI_POLARITY_HIGH, depending on SD card mode
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;    // Or SPI_PHASE_2EDGE
+  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128; // Adjust for performance vs. stability - Slower for init
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 7;
+  hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+
+  /* USER CODE END SPI2_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1250,6 +1365,39 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET); // Ensure motor is OFF initially
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  // SD Card SPI Pins (PB12=CS, PC3=MOSI, PC2=MISO, PD3=CLK)
+
+  // PB12 (CS) - Already configured as output in SD.h/SD.c, ensure it's controlled there.
+  // Here we ensure the clock is enabled for GPIOB if not already.
+  // __HAL_RCC_GPIOB_CLK_ENABLE(); // Already enabled for LEDs
+
+  // PC3 (MOSI), PC2 (MISO)
+  __HAL_RCC_GPIOC_CLK_ENABLE(); // Ensure GPIOC clock is enabled
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL; // Or GPIO_PULLUP for MISO if required by card/long lines
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  // PD3 (CLK)
+  __HAL_RCC_GPIOD_CLK_ENABLE(); // Ensure GPIOD clock is enabled
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  // Configure SD Card Chip Select (PB12) as Output Push-Pull
+  // This is critical and should be explicitly set up.
+  // SD.c will handle driving it HIGH/LOW.
+  GPIO_InitStruct.Pin = SD_CS_Pin; // Using SD_CS_Pin from SD.h
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP; // Keep CS high when not selected
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct); // Using SD_CS_GPIO_Port from SD.h
+  HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET); // Initialize CS high (deselected)
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
