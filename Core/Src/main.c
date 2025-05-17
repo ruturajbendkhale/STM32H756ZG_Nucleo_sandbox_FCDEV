@@ -31,6 +31,8 @@
 #include "kalman_filter.h" // Include Kalman filter
 #include "flight_phases.h" // Include for flight state machine
 #include "SD.h" // Include SD card support
+#include "parameters.h" // Include the new parameters header
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -43,9 +45,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BMP390_I2C_ADDRESS_LOW (0x76 << 1) // Default I2C address for BMP390 when SDO is low
-#define BMP390_I2C_ADDRESS_HIGH (0x77 << 1) // I2C address for BMP390 when SDO is high
-#define TARGET_LOOP_PERIOD_MS 10 // For 100Hz sampling frequency (1000ms / 100Hz = 10ms)
+// BMP390 and loop period parameters now defined in parameters.h
 
 // Define these to print specific sensor data. Comment out to disable.
 #define PRINT_LSM6DSO_ACCEL_DATA
@@ -86,6 +86,8 @@ ETH_HandleTypeDef heth;
 
 I2C_HandleTypeDef hi2c1;
 
+SPI_HandleTypeDef hspi2;
+
 UART_HandleTypeDef huart3;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
@@ -107,7 +109,7 @@ static flight_fsm_t flight_state_machine;
 static control_settings_t control_settings;
 static bool sd_logging_stopped = false; // Flag to ensure SD_Log_Stop is called once
 static uint32_t log_entry_count = 0;    // Counter for logged entries
-#define MAX_LOG_ENTRIES 100             // Maximum number of entries to log for this test
+// Use MAX_LOG_ENTRIES_DEBUG from parameters.h
 
 #define LSM6DSO_I2C_ADD_L 0x6A  // Standard I2C address for LSM6DSO (0x6A when SDO/SA0 is connected to GND)
 #define LSM6DSO_I2C_ADD_H 0x6B  // Alternative I2C address for LSM6DSO (0x6B when SDO/SA0 is connected to VDD)
@@ -173,7 +175,7 @@ static int32_t platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t 
 
 // At the top of your file, declare a variable for LED blink timing
 static uint32_t led3_last_toggle_time = 0; // Last time LED3 was toggled
-const uint32_t led3_blink_interval = 200; // Blink interval in milliseconds
+// LED blink interval is defined in parameters.h as LED3_BLINK_INTERVAL_MS
 
 /* USER CODE END PV */
 
@@ -264,14 +266,14 @@ void bmp390_debug_print(const char *const fmt, ...) {
 // pressure_hpa: current measured pressure in hPa
 // known_altitude_meters: current known altitude in meters
 void calibrate_sea_level_pressure_hpa(float current_pressure_hpa, float known_altitude_meters) {
-  sea_level_pressure_hpa = current_pressure_hpa / powf((1.0f - (known_altitude_meters * 0.0000225577f)), 5.255877f);
+  sea_level_pressure_hpa = current_pressure_hpa / powf((1.0f - (known_altitude_meters * BMP_ALTITUDE_FACTOR_1)), BMP_ALTITUDE_FACTOR_2);
 }
 
 // pressure_hpa: current measured pressure in hPa
 // returns altitude in meters
 float calculate_altitude_hpa(float pressure_hpa) {
   if (sea_level_pressure_hpa <= 0) return 0.0f; // Avoid division by zero or log of non-positive
-  return 44330.0f * (1.0f - powf(pressure_hpa / sea_level_pressure_hpa, 0.1903f));
+  return BMP_ALTITUDE_FORMULA_FACTOR * (1.0f - powf(pressure_hpa / sea_level_pressure_hpa, BMP_ALTITUDE_FORMULA_EXPONENT));
 }
 
 /* USER CODE END PFP */
@@ -290,7 +292,7 @@ float calculate_altitude_hpa(float pressure_hpa) {
 static float lsm6dso_from_fs16g_to_mg(int16_t lsb)
 {
   // Apply a 2x correction factor - the sensor is reporting ~half the expected values
-  return (float)lsb * 0.488f * 2.0f; // Sensitivity for +/-16g full scale with 2x correction
+  return (float)lsb * LSM6DSO_16G_SENSITIVITY_CORR * LSM6DSO_SENSITIVITY_CORR_FACTOR; // Sensitivity from parameters.h
 }
 
 /**
@@ -300,7 +302,7 @@ static float lsm6dso_from_fs16g_to_mg(int16_t lsb)
   */
 static float lsm6dso_from_fs250dps_to_mdps(int16_t lsb)
 {
-  return (float)lsb * 8.75f; // Sensitivity for +/-250dps full scale
+  return (float)lsb * LSM6DSO_250DPS_SENSITIVITY; // Sensitivity from parameters.h
 }
 
 /**
@@ -310,7 +312,7 @@ static float lsm6dso_from_fs250dps_to_mdps(int16_t lsb)
   */
 static float lsm6dso_from_fs32g_to_mg(int16_t lsb)
 {
-  return (float)lsb * 0.976f; // Sensitivity for +/-32g full scale (0.976 mg/LSB)
+  return (float)lsb * LSM6DSO_32G_SENSITIVITY; // Sensitivity from parameters.h
 }
 
 /**
@@ -320,7 +322,7 @@ static float lsm6dso_from_fs32g_to_mg(int16_t lsb)
   */
 static float lsm6dso_from_fs2000dps_to_mdps(int16_t lsb)
 {
-  return (float)lsb * 70.0f; // Sensitivity for +/-2000dps full scale (70 mdps/LSB)
+  return (float)lsb * LSM6DSO_2000DPS_SENSITIVITY; // Sensitivity from parameters.h
 }
 
 // Function to calibrate sea level pressure based on current altitude
@@ -374,6 +376,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_SPI2_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   
   // Initialize I2C (already called by HAL_Init system, but good to ensure)
@@ -399,7 +402,7 @@ int main(void)
       sprintf(uart_buffer, "Found I2C device at address: 0x%02X\r\n", i);
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       
-      if (i == (BMP390_I2C_ADDRESS_LOW >> 1) || i == (BMP390_I2C_ADDRESS_HIGH >> 1)) {
+      if (i == (BMP390_I2C_ADDRESS_LOW_SHIFTED >> 1) || i == (BMP390_I2C_ADDRESS_HIGH_SHIFTED >> 1)) {
         sprintf(uart_buffer, "  --> This could be a BMP390 sensor!\r\n");
         HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
       }
@@ -620,7 +623,7 @@ int main(void)
   } else {
       sprintf(uart_buffer, "BMP390 Calibration failed. Using default sea level pressure (1013.25 hPa).\r\n");
       HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-      sea_level_pressure_hpa = 1013.25f; // Default
+      sea_level_pressure_hpa = BMP_DEFAULT_SEA_LEVEL_PRESSURE_HPA; // Default from parameters.h
   }
   
   // Initialize ADXL375 high-g accelerometer
@@ -671,11 +674,11 @@ int main(void)
   }
 
   kalman_init(&kf_altitude_velocity,
-              initial_altitude_m,       // initial_altitude_m
-              0.0225f,                  // initial_altitude_variance (R_baro)
-              1.0f,                     // initial_velocity_variance (e.g., 1 (m/s)^2)
-              0.000123f,                // process_noise_accel_variance (sigma_a^2 for Q)
-              0.0225f);                 // measurement_noise_baro_variance (R_baro)
+              initial_altitude_m,                  // initial_altitude_m
+              KF_INITIAL_ALTITUDE_VARIANCE,        // initial_altitude_variance (R_baro)
+              KF_INITIAL_VELOCITY_VARIANCE,        // initial_velocity_variance (e.g., 1 (m/s)^2)
+              KF_PROCESS_NOISE_ACCEL_VARIANCE,     // process_noise_accel_variance (sigma_a^2 for Q)
+              KF_MEASUREMENT_NOISE_BARO_VARIANCE); // measurement_noise_baro_variance (R_baro)
 
   sprintf(uart_buffer, "Kalman Filter Initialized. Initial Alt: %.2fm\r\n", initial_altitude_m);
   HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
@@ -697,7 +700,7 @@ int main(void)
   }
 
   // Initialize Control Settings
-  control_settings.liftoff_acc_threshold = 4.0f; // 4G threshold
+  control_settings.liftoff_acc_threshold = FLIGHT_LIFTOFF_ACCEL_THRESHOLD_G; // Use constant from parameters.h
 
   // Initialize SD Card
   MX_SPI2_Init(); // Initialize SPI2 peripheral for SD Card
@@ -717,15 +720,6 @@ int main(void)
 
    // Define the flight state machine instance // This comment seems to be a leftover, FSM is already defined
   /* USER CODE END 2 */
-
-  // Wait for arming signal (PA5 to go HIGH when disconnected from GND)
-  // Loop indefinitely until PA5 is HIGH (disconnected from GND)
-  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_5) == GPIO_PIN_RESET) {
-      HAL_Delay(1); // Optional: uncomment for a slight delay
-  }
-
-  sprintf(uart_buffer, "System ARMED (PA5 HIGH). Entering main loop.\r\n");
-  HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -789,7 +783,7 @@ int main(void)
 
     // Calculate world-frame vertical linear acceleration for Kalman filter
     float acc_z_world_g = (2.0f*(q1*q3 - q0*q2)*acc_g[0] + 2.0f*(q2*q3 + q0*q1)*acc_g[1] + (q0*q0 - q1*q1 - q2*q2 + q3*q3)*acc_g[2]);
-    float linear_accel_z_mps2 = (acc_z_world_g - 1.0f) * 9.80665f; // Assuming Z is UP
+    float linear_accel_z_mps2 = (acc_z_world_g - 1.0f) * STANDARD_GRAVITY_MPS2; // Assuming Z is UP, using constant from parameters.h
 
     // Kalman Predict Step (every loop = every 10ms)
     kalman_predict(&kf_altitude_velocity, linear_accel_z_mps2, 0.01f);
@@ -846,7 +840,7 @@ int main(void)
     estimation_output_t current_state_estimation;
     current_state_estimation.height = kf_altitude_velocity.altitude_m;
     current_state_estimation.velocity = kf_altitude_velocity.vertical_velocity_mps;
-    current_state_estimation.acceleration = linear_accel_z_mps2; // World frame Z acceleration
+    current_state_estimation.acceleration = linear_accel_z_mps2; // Global frame Z acceleration
 
     // Read Launch Detect Pin (PA6)
     bool launch_pin_is_high = (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6) == GPIO_PIN_SET);
@@ -891,18 +885,18 @@ int main(void)
     current_log_entry.flight_phase = (uint8_t)flight_state_machine.flight_state;
 
     // Log the data to SD card if count is less than MAX_LOG_ENTRIES
-    if (!sd_logging_stopped && log_entry_count < MAX_LOG_ENTRIES) {
+    if (!sd_logging_stopped && log_entry_count < MAX_LOG_ENTRIES_DEBUG) {
         SD_Log_Data(&current_log_entry);
         log_entry_count++;
 
-        if (log_entry_count >= MAX_LOG_ENTRIES) {
-            sprintf(uart_buffer, "Reached %u log entries. Stopping SD card logging.\r\n", MAX_LOG_ENTRIES);
+        if (log_entry_count >= MAX_LOG_ENTRIES_DEBUG) {
+            sprintf(uart_buffer, "Reached %u log entries. Stopping SD card logging.\r\n", MAX_LOG_ENTRIES_DEBUG);
             HAL_UART_Transmit(&huart3, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
             SD_Log_Stop();
             sd_logging_stopped = true;
             HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_RESET); // Turn off Green LED (LD2) to indicate logging stopped
         }
-    } else if (!sd_logging_stopped && log_entry_count >= MAX_LOG_ENTRIES) {
+    } else if (!sd_logging_stopped && log_entry_count >= MAX_LOG_ENTRIES_DEBUG) {
         // This case handles if logging was already meant to be stopped but flag wasn't set.
         // Ensures SD_Log_Stop() is called if it somehow wasn't.
         if (!sd_logging_stopped) { // Check flag again to be absolutely sure
@@ -915,7 +909,7 @@ int main(void)
     // Check if execution time exceeds 10ms
     if (execution_time_ms >= TARGET_LOOP_PERIOD_MS) {
         // Blink LED3 if the execution time exceeds 10ms
-        if (HAL_GetTick() - led3_last_toggle_time >= led3_blink_interval) {
+        if (HAL_GetTick() - led3_last_toggle_time >= LED3_BLINK_INTERVAL_MS) {
             HAL_GPIO_TogglePin(GPIOB, LD3_Pin); // Toggle LED3
             led3_last_toggle_time = HAL_GetTick(); // Update last toggle time
         }
@@ -986,12 +980,12 @@ int main(void)
     }
     char phase_char = 'U'; // Unknown/default
     switch (flight_state_machine.flight_state) {
-        case READY:     phase_char = 'R'; break;
-        case THRUSTING: phase_char = 'T'; break;
-        case COASTING:  phase_char = 'C'; break;
-        case DROGUE:    phase_char = 'D'; break;
-        case MAIN:      phase_char = 'M'; break;
-        case TOUCHDOWN: phase_char = 'L'; break; // L for Landed/Touchdown
+        case READY:     phase_char = 'RDY'; break;
+        case THRUSTING: phase_char = 'THR'; break;
+        case COASTING:  phase_char = 'COA'; break;
+        case DROGUE:    phase_char = 'DRO'; break;
+        case MAIN:      phase_char = 'MAI'; break;
+        case TOUCHDOWN: phase_char = 'TCH'; break; // L for Landed/Touchdown
     }
     current_len += snprintf(uart_buffer + current_len, sizeof(uart_buffer) - current_len, "FP:%c", phase_char);
     // No need to set data_printed_prev = true; as this is the last item before newline typically
@@ -1169,6 +1163,46 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi2.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.NSS = SPI_NSS_SOFT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 7;
+  hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+
+  /* USER CODE END SPI2_Init 2 */
+
+}
+
+/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -1239,46 +1273,6 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI2_Init(void)
-{
-
-  /* USER CODE BEGIN SPI2_Init 0 */
-
-  /* USER CODE END SPI2_Init 0 */
-
-  /* USER CODE BEGIN SPI2_Init 1 */
-
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW; // Or SPI_POLARITY_HIGH, depending on SD card mode
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;    // Or SPI_PHASE_2EDGE
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128; // Adjust for performance vs. stability - Slower for init
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 7;
-  hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI2_Init 2 */
-
-  /* USER CODE END SPI2_Init 2 */
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1295,11 +1289,12 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  // __HAL_RCC_GPIOF_CLK_ENABLE(); /* Clock for PF12, can be removed if PF12 is no longer used */
   __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LD1_Pin|LD3_Pin|LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, LD1_Pin|SPI2_CS_Pin|LD3_Pin|APPO_TRIG_Pin
+                          |MAIN_TRIG_Pin|LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(USB_PowerSwitchOn_GPIO_Port, USB_PowerSwitchOn_Pin, GPIO_PIN_RESET);
@@ -1310,8 +1305,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD1_Pin LD3_Pin LD2_Pin */
-  GPIO_InitStruct.Pin = LD1_Pin|LD3_Pin|LD2_Pin;
+  /*Configure GPIO pins : ARM_PIN_Pin LL_Detect_PIN_Pin */
+  GPIO_InitStruct.Pin = ARM_PIN_Pin|LL_Detect_PIN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LD1_Pin SPI2_CS_Pin LD3_Pin APPO_TRIG_Pin
+                           MAIN_TRIG_Pin LD2_Pin */
+  GPIO_InitStruct.Pin = LD1_Pin|SPI2_CS_Pin|LD3_Pin|APPO_TRIG_Pin
+                          |MAIN_TRIG_Pin|LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1329,40 +1332,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PF12 - REMOVE/COMMENT OUT if no longer used */
-  // GPIO_InitStruct.Pin = GPIO_PIN_12;
-  // GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  // GPIO_InitStruct.Pull = GPIO_PULLUP;
-  // HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA5 for Arming Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA6 for Launch Detect */
-  GPIO_InitStruct.Pin = GPIO_PIN_6;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PB4 for Nosecone Motor */
-  GPIO_InitStruct.Pin = GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET); // Ensure motor is OFF initially
-
-  /*Configure GPIO pin : PB5 for Main Parachute Motor */
-  GPIO_InitStruct.Pin = GPIO_PIN_5;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET); // Ensure motor is OFF initially
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   // SD Card SPI Pins (PB12=CS, PC3=MOSI, PC2=MISO, PD3=CLK)

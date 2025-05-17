@@ -3,6 +3,7 @@
         "lsm6dso.h": "c",
         "adxl375.h": "c",
         "lsm6dso_reg.h": "c",
-        "sd.h": "c"
+        "sd.h": "c",
+        "parameters.h": "c"
     }
 }
